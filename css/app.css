@@ -181,7 +181,7 @@ button:disabled { opacity: .4; cursor: default; }
 
 .welcome { text-align: center; padding: 40px 28px; max-width: 640px; margin: 30px auto; }
 .welcome p { color: var(--muted); margin: 10px auto 22px; max-width: 480px; }
-.welcome .row { justify-content: center; }
+.welcome .row { justify-content: center; flex-wrap: wrap; }
 .welcome-art { width: 84px; height: 84px; border-radius: 26px; margin: 0 auto 16px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
 
 /* ---------- Vak ---------- */
