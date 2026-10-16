@@ -3,6 +3,7 @@ import { requestPersistence } from './db.js';
 import { toast, closePopovers } from './util.js';
 import { dashboard, subjectView, summaryView, practiceView, settingsView, planningView } from './views.js';
 import { openEditor } from './editor.js';
+import { catchUp } from './planner.js';
 
 const app = document.getElementById('app');
 let cleanup = null;
@@ -19,6 +20,9 @@ async function route() {
   document.body.classList.toggle('in-editor', parts[0] === 'notitie');
   window.scrollTo(0, 0);
   try {
+    // Wat gisteren niet af kwam, schuift door voordat het dashboard/de planning getoond wordt
+    if ([undefined, 'planning', 'vak'].includes(parts[0])) await catchUp().catch(e => console.warn('inhalen mislukt', e));
+    if (my !== seq) return;
     switch (parts[0]) {
       case undefined: await dashboard(app); break;
       case 'vak': await subjectView(app, parts[1], parts[2]); break;

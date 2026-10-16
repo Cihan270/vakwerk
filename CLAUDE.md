@@ -54,6 +54,8 @@ Claude levert samenvattingen aan via een **pakketbestand** dat de gebruiker in d
 }
 ```
 
+- Optioneel `subjects: [{ name, color, aliases }]` bovenaan het pakket: die vakken worden zonder vraag aangemaakt (of hun Canvas-namen aangevuld).
+- **Inhalen** (`js/planner.js`): niet-afgevinkte studieblokken van eerdere dagen schuiven bij het openen van de app door naar de volgende momenten van hetzelfde vak, vóór dat vak's tentamen; "Vrij"-blokken worden opgeofferd (dag vóór een tentamen als laatste). Doorgeschoven items krijgen `movedFrom`; een nieuwe import laat die plek staan.
 - `slot`: 0 = ochtend, 1 = middag, 2 = avond. `kind`: `study` (afvinkbaar), `class`, `exam` (geeft een aftelkaart op het dashboard), `rest`.
 - Persoonlijke planningen horen in OneDrive, **niet** in deze (publieke) repo. Lokaal testen kan via `.local-test/` (staat in .gitignore).
 

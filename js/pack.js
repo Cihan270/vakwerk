@@ -30,6 +30,20 @@ export async function importPack(data) {
   if (!items.length && !plan.length) { toast('Er staat niets in dit pakket'); return null; }
   let subjects = await db.all('subjects');
 
+  // Vakken die het pakket zelf beschrijft (naam, kleur, Canvas-namen): aanmaken of aanvullen zonder te vragen
+  for (const def of data.subjects || []) {
+    if (!def?.name) continue;
+    const ex = findSubject(subjects, def.name) || (def.aliases || []).map(a => findSubject(subjects, a)).find(Boolean);
+    if (ex) {
+      const aliases = [...new Set([...(ex.aliases || []), ...(def.aliases || [])])];
+      if (aliases.length !== (ex.aliases || []).length) { ex.aliases = aliases; await db.put('subjects', ex); }
+      continue;
+    }
+    const s = { id: uid('v'), name: def.name, color: def.color || SUBJECT_COLORS[subjects.length % SUBJECT_COLORS.length], aliases: def.aliases || [], created: Date.now(), order: subjects.length };
+    await db.put('subjects', s);
+    subjects.push(s);
+  }
+
   // Vakken die nog niet bestaan: laat de gebruiker koppelen of aanmaken
   const names = [...items.map(i => i.subject), ...plan.map(p => p.subject).filter(Boolean)];
   const unknown = [...new Set(names)].filter(n => !findSubject(subjects, n));
@@ -103,9 +117,12 @@ export async function importPack(data) {
     const subjectId = p.subject ? (mapping[p.subject] || findSubject(subjects, p.subject)?.id || null) : null;
     const id = 'pk:' + (p.id || `${p.date}-${p.slot ?? 0}-${slug(p.title)}`);
     const ex = await db.get('plan', id);
+    // Al doorgeschoven? Dan blijft de nieuwe plek staan.
+    const keepPos = ex?.movedFrom;
     await db.put('plan', {
-      id, subjectId, date: p.date, slot: Math.min(2, Math.max(0, +p.slot || 0)), kind: p.kind || 'study',
+      id, subjectId, date: keepPos ? ex.date : p.date, slot: keepPos ? ex.slot : Math.min(2, Math.max(0, +p.slot || 0)), kind: p.kind || 'study',
       title: p.title, details: p.details || '', important: p.important || '', done: ex?.done || false, source: 'claude',
+      ...(keepPos ? { movedFrom: ex.movedFrom } : {}), ...(ex?.keep ? { keep: true } : {}),
     });
     count.plan++;
   }

@@ -9,6 +9,7 @@ import { markdown, plainText } from './markdown.js';
 import { GRADES, schedule, isDue, isNew, intervalLabel, newSrs } from './srs.js';
 import { importFile, exportBackup, seedDemo, removeDemo, wipeAll, isDemoSubject } from './pack.js';
 import { PAPERS } from './ink.js';
+import { shiftBlock, undoShift } from './planner.js';
 
 const KINDS = ['Hoorcollege', 'Werkcollege', 'Practicum', 'Tutorial', 'Zelfstudie', 'Tentamen', 'Overig'];
 const go = h => { location.hash = h; };
@@ -38,7 +39,7 @@ function planBlock(p, s) {
     ${checkable ? `<button class="check ${p.done ? 'on' : ''}" data-pdone="${p.id}" aria-label="Afvinken">${p.done ? icon('check', 14) : ''}</button>`
       : `<span class="pk-ic">${icon(p.kind === 'exam' ? 'flag' : p.kind === 'class' ? 'calendar' : 'clock', 16)}</span>`}
     <button class="pblk-body" data-plan="${p.id}">
-      <span class="pslot">${SLOTS[p.slot] || ''}${tag ? ' · ' + esc(tag) : ''}</span>
+      <span class="pslot">${SLOTS[p.slot] || ''}${tag ? ' · ' + esc(tag) : ''}${p.movedFrom && !p.done ? ` <em class="moved" title="Oorspronkelijk ${esc(fmtDate(p.movedFrom))}">↻ doorgeschoven</em>` : ''}</span>
       <b>${esc(p.title)}</b>
       ${p.details ? `<small>${esc(p.details)}</small>` : ''}
       ${p.important ? `<small class="imp"><i>★</i> Belangrijk: ${esc(p.important)}</small>` : ''}
@@ -108,10 +109,16 @@ async function editPlanItem(p) {
         <label class="field"><span>Soort</span><select name="kind">${PLAN_KINDS.map(k => `<option value="${k.id}" ${k.id === (p?.kind || 'study') ? 'selected' : ''}>${k.label}</option>`).join('')}</select></label>
       </div>
       <label class="field"><span>Details</span><textarea name="details" rows="4">${esc(p?.details || '')}</textarea></label>
-      ${p?.important ? `<p class="muted small">★ Belangrijk: ${esc(p.important)}</p>` : ''}`,
-    actions: isEdit ? [{ label: 'Verwijder', value: 'del', danger: true }, { label: 'Annuleer', value: null }, { label: 'Opslaan', value: 'ok', primary: true }] : undefined,
+      ${p?.important ? `<p class="muted small">★ Belangrijk: ${esc(p.important)}</p>` : ''}
+      ${p?.movedFrom ? `<p class="muted small">↻ Doorgeschoven, oorspronkelijk gepland op ${esc(fmtDate(p.movedFrom))}</p>` : ''}`,
+    actions: isEdit ? [
+      { label: 'Verwijder', value: 'del', danger: true },
+      ...(p.kind === 'study' && !p.done ? [{ label: 'Niet gelukt → schuif door', value: 'shift' }] : []),
+      { label: 'Annuleer', value: null }, { label: 'Opslaan', value: 'ok', primary: true },
+    ] : undefined,
   });
   if (r.action === 'del') { await db.del('plan', p.id); return true; }
+  if (r.action === 'shift') return !!(await shiftBlock(p.id));
   if (r.action !== 'ok') return false;
   await db.put('plan', { done: false, important: '', source: 'eigen', ...(p || {}), id: p?.id || uid('b'), title: r.data.title.trim(), date: r.data.date, slot: +r.data.slot, subjectId: r.data.subjectId || null, kind: r.data.kind, details: r.data.details });
   return true;
@@ -129,6 +136,7 @@ async function handlePlanClick(t, rerender) {
 export async function planningView(root, subjectId = null) {
   const D = await loadAll();
   const meta = await getSetting('planNotes', null);
+  const undoInfo = await getSetting('planUndo', null);
   const s = subjectId ? D.sub[subjectId] : null;
   const withPlan = D.subjects.filter(x => D.plan.some(p => p.subjectId === x.id));
   root.innerHTML = `
@@ -138,6 +146,7 @@ export async function planningView(root, subjectId = null) {
         <div><h1>${esc(meta?.title || 'Planning')}</h1><p class="muted">${D.plan.filter(p => p.kind === 'study' && p.done).length} van ${D.plan.filter(p => p.kind === 'study').length} studieblokken af</p></div></div>
       <div class="actions"><button class="btn" data-a="addblock">${icon('plus', 18)} Blok</button></div>
     </header>
+    ${undoInfo && undoInfo.date === isoDay() ? `<div class="shift-banner"><b>↻</b><span>${undoInfo.label === 'manual' ? 'Je hebt een blok doorgeschoven' : 'Blokken die nog niet af waren zijn doorgeschoven'} — ${undoInfo.moved} blok${undoInfo.moved === 1 ? '' : 'ken'} kregen een nieuwe plek vóór het tentamen.</span><button class="btn small" data-a="undoshift">Ongedaan maken</button></div>` : ''}
     ${examCards(D)}
     ${meta?.notes?.length ? `<details class="card plan-notes"><summary><b>Let op</b> <span class="muted">(${meta.notes.length})</span></summary><ul>${meta.notes.map(n => `<li>${markdown(n).replace(/^<p>|<\/p>$/g, '')}</li>`).join('')}</ul></details>` : ''}
     <div class="chips filter">
@@ -154,6 +163,7 @@ export async function planningView(root, subjectId = null) {
     const a = e.target.closest('[data-a]')?.dataset.a;
     if (a === 'back') go('#/');
     if (a === 'addblock') { if (await editPlanItem({ subjectId })) rerender(); }
+    if (a === 'undoshift') { if (await undoShift()) rerender(); }
   };
   const t = $('#vandaag', root);
   if (t) requestAnimationFrame(() => { t.scrollIntoView({ block: 'start' }); scrollBy(0, -12); });
@@ -260,6 +270,18 @@ export async function dashboard(root) {
   due.forEach(c => { dueBySub[c.subjectId] = (dueBySub[c.subjectId] || 0) + 1; });
   const todayPlan = D.plan.filter(p => p.date === isoDay(now));
   const nextPlan = D.plan.find(p => p.date > isoDay(now) && p.kind !== 'rest');
+  // Zonder vast weekrooster maar mét planning: de studiedag krijgt de grote plek
+  const showRooster = D.slots.length > 0 || !D.plan.length;
+  const roosterCard = () => `<section class="card">
+        <div class="card-h"><h3>${icon('calendar', 18)} Rooster</h3>
+          <div class="seg small"><button class="pill ${view === 'today' ? 'on' : ''}" data-view="today">Vandaag</button><button class="pill ${view === 'week' ? 'on' : ''}" data-view="week">Week</button></div></div>
+        <div class="sched">${view === 'week' ? weekGrid(D, now) : `<div class="slots">${todayHtml}</div>`}</div>
+      </section>`;
+  const planCard = todayPlan.length || nextPlan ? `<section class="card">
+          <div class="card-h"><h3>${icon('list', 18)} ${todayPlan.length ? 'Vandaag studeren' : 'Planning'}</h3><a class="link" href="#/planning">Hele planning →</a></div>
+          ${todayPlan.length ? `<div class="pblocks stack">${todayPlan.map(p => planBlock(p, D.sub[p.subjectId])).join('')}</div>`
+            : `<p class="empty small">Vandaag niets gepland. Volgende: <b>${fmtDate(nextPlan.date)}</b> — ${esc(nextPlan.title)}</p>`}
+        </section>` : '';
   const study = [...D.summaries].sort((a, b) => (a.read - b.read) || (b.date || '').localeCompare(a.date || '') || b.updated - a.updated).slice(0, 4);
 
   const hero = upcoming ? (() => {
@@ -307,17 +329,9 @@ export async function dashboard(root) {
     ${hero}
     ${examCards(D)}
     <div class="dash-grid">
-      <section class="card">
-        <div class="card-h"><h3>${icon('calendar', 18)} Rooster</h3>
-          <div class="seg small"><button class="pill ${view === 'today' ? 'on' : ''}" data-view="today">Vandaag</button><button class="pill ${view === 'week' ? 'on' : ''}" data-view="week">Week</button></div></div>
-        <div class="sched">${view === 'week' ? weekGrid(D, now) : `<div class="slots">${todayHtml}</div>`}</div>
-      </section>
+      ${showRooster ? roosterCard() : planCard}
       <div class="col">
-        ${todayPlan.length || nextPlan ? `<section class="card">
-          <div class="card-h"><h3>${icon('list', 18)} ${todayPlan.length ? 'Vandaag studeren' : 'Planning'}</h3><a class="link" href="#/planning">Hele planning →</a></div>
-          ${todayPlan.length ? `<div class="pblocks stack">${todayPlan.map(p => planBlock(p, D.sub[p.subjectId])).join('')}</div>`
-            : `<p class="empty small">Vandaag niets gepland. Volgende: <b>${fmtDate(nextPlan.date)}</b> — ${esc(nextPlan.title)}</p>`}
-        </section>` : ''}
+        ${showRooster ? planCard : ''}
         <section class="card">
           <div class="card-h"><h3>${icon('task', 18)} Deadlines</h3><button class="link" data-a="addtask">+ Opdracht</button></div>
           ${openTasks.length ? `<div class="tasks">${openTasks.slice(0, 6).map(t => taskRow(t, D.sub[t.subjectId], true)).join('')}</div>` : '<p class="empty small">Geen openstaande opdrachten 🎉</p>'}
@@ -830,6 +844,7 @@ export async function settingsView(root) {
   const D = await loadAll();
   const name = await getSetting('name', '');
   const paper = await getSetting('defaultPaper', 'lined');
+  const autoShift = await getSetting('autoShift', true);
   let est = null, persisted = false;
   try { est = await navigator.storage?.estimate?.(); persisted = await navigator.storage?.persisted?.(); } catch {}
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
@@ -861,6 +876,7 @@ export async function settingsView(root) {
     <section class="card">
       <h3>Algemeen</h3>
       <label class="field"><span>Je naam (voor de begroeting)</span><input class="input" data-set="name" value="${esc(name)}" placeholder="optioneel"></label>
+      <label class="menu-toggle setting"><span><b>Automatisch inhalen</b><small>Studieblokken die je op een dag niet hebt afgevinkt, schuiven de volgende keer dat je de app opent door naar de eerstvolgende vrije momenten vóór het tentamen.</small></span><input type="checkbox" data-toggle="autoShift" ${autoShift ? 'checked' : ''}><i class="switch"></i></label>
       <div class="field"><span>Standaard papier voor nieuwe notities</span><div class="seg wrap">${PAPERS.map(p => `<button class="pill ${p.id === paper ? 'on' : ''}" data-paper="${p.id}">${p.label}</button>`).join('')}</div></div>
     </section>
 
@@ -930,6 +946,7 @@ export async function settingsView(root) {
     }
   };
   $('[data-set=name]', root).addEventListener('change', e => setSetting('name', e.target.value.trim()));
+  $('[data-toggle=autoShift]', root).addEventListener('change', e => { setSetting('autoShift', e.target.checked); toast(e.target.checked ? 'Automatisch inhalen staat aan' : 'Automatisch inhalen staat uit'); });
 }
 
 // ================= ZOEKEN =================
