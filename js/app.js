@@ -4,6 +4,7 @@ import { toast, closePopovers } from './util.js';
 import { dashboard, subjectView, summaryView, practiceView, settingsView, planningView } from './views.js';
 import { openEditor } from './editor.js';
 import { catchUp } from './planner.js';
+import { checkInbox, connectInbox } from './inbox.js';
 
 const app = document.getElementById('app');
 let cleanup = null;
@@ -31,6 +32,13 @@ async function route() {
       case 'oefenen': cleanup = await practiceView(app, parts[1], query === 'alles'); break;
       case 'instellingen': await settingsView(app); break;
       case 'planning': await planningView(app, parts[1] || null); break;
+      case 'koppel': { // #/koppel?bron=<inbox-link> — eenmalig de inbox van Claude koppelen
+        const q = new URLSearchParams(query || '');
+        app.innerHTML = '<div class="view"><p class="empty">Inbox koppelen…</p></div>';
+        if (q.get('bron')) await connectInbox(q.get('bron'), q.get('sleutel') || '');
+        location.replace('#/');
+        break;
+      }
       default: location.hash = '#/';
     }
   } catch (err) {
@@ -46,6 +54,11 @@ document.addEventListener('dblclick', e => e.preventDefault());
 
 route();
 requestPersistence();
+
+// Inbox van Claude: bij openen en bij terugkomen in de app kijken of er iets nieuws is
+const pullInbox = () => checkInbox().then(r => { if (r && !document.body.classList.contains('in-editor')) route(); }).catch(() => {});
+if (!location.hash.startsWith('#/koppel')) pullInbox();
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') pullInbox(); });
 
 // Offline: service worker
 if ('serviceWorker' in navigator && !['localhost', '127.0.0.1'].includes(location.hostname)) {

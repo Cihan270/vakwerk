@@ -10,6 +10,7 @@ import { GRADES, schedule, isDue, isNew, intervalLabel, newSrs } from './srs.js'
 import { importFile, exportBackup, seedDemo, removeDemo, wipeAll, isDemoSubject } from './pack.js';
 import { PAPERS } from './ink.js';
 import { shiftBlock, undoShift } from './planner.js';
+import { connectInbox, checkInbox, disconnectInbox } from './inbox.js';
 
 const KINDS = ['Hoorcollege', 'Werkcollege', 'Practicum', 'Tutorial', 'Zelfstudie', 'Tentamen', 'Overig'];
 const go = h => { location.hash = h; };
@@ -845,6 +846,8 @@ export async function settingsView(root) {
   const name = await getSetting('name', '');
   const paper = await getSetting('defaultPaper', 'lined');
   const autoShift = await getSetting('autoShift', true);
+  const inboxUrl = await getSetting('inboxUrl', '');
+  const inboxAt = await getSetting('inboxImportedAt', 0);
   let est = null, persisted = false;
   try { est = await navigator.storage?.estimate?.(); persisted = await navigator.storage?.persisted?.(); } catch {}
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
@@ -878,6 +881,15 @@ export async function settingsView(root) {
       <label class="field"><span>Je naam (voor de begroeting)</span><input class="input" data-set="name" value="${esc(name)}" placeholder="optioneel"></label>
       <label class="menu-toggle setting"><span><b>Automatisch inhalen</b><small>Studieblokken die je op een dag niet hebt afgevinkt, schuiven de volgende keer dat je de app opent door naar de eerstvolgende vrije momenten vóór het tentamen.</small></span><input type="checkbox" data-toggle="autoShift" ${autoShift ? 'checked' : ''}><i class="switch"></i></label>
       <div class="field"><span>Standaard papier voor nieuwe notities</span><div class="seg wrap">${PAPERS.map(p => `<button class="pill ${p.id === paper ? 'on' : ''}" data-paper="${p.id}">${p.label}</button>`).join('')}</div></div>
+    </section>
+
+    <section class="card">
+      <h3>Inbox van Claude</h3>
+      ${inboxUrl
+        ? `<p class="muted">Gekoppeld ✓ — alles wat Claude voor je klaarzet (samenvattingen, planning, deadlines) komt vanzelf binnen als je de app opent.${inboxAt ? ` Laatst binnengekomen: ${fmtDate(inboxAt)} ${new Date(inboxAt).toTimeString().slice(0, 5)}.` : ''}</p>
+           <div class="row gap wrap"><button class="btn primary" data-a="inboxpull">${icon('import', 18)} Nu ophalen</button><button class="btn ghost" data-a="inboxoff">Ontkoppelen</button></div>`
+        : `<p class="muted">Plak hier de koppel-link die Claude je gaf. Daarna komt alles vanzelf binnen, zonder importeren.</p>
+           <div class="row gap wrap"><input class="input grow-input" data-inbox placeholder="Plak hier je koppel-link" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn primary" data-a="inboxon">Koppelen</button></div>`}
     </section>
 
     <section class="card">
@@ -941,6 +953,9 @@ export async function settingsView(root) {
       case 'import': return doImport();
       case 'backup': return exportBackup();
       case 'restore': return doImport();
+      case 'inboxon': { const v = $('[data-inbox]', root).value.trim(); if (await connectInbox(v) !== null || await getSetting('inboxUrl', '')) rerender(); return; }
+      case 'inboxpull': await checkInbox({ force: true }); rerender(); return;
+      case 'inboxoff': await disconnectInbox(); rerender(); return;
       case 'removedemo': if (await removeDemo()) rerender(); return;
       case 'wipe': if (await wipeAll()) go('#/'); return;
     }

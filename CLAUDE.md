@@ -14,7 +14,12 @@ Claude levert samenvattingen aan via een **pakketbestand** dat de gebruiker in d
    - `questions`: tentamenachtige oefenvragen met uitgewerkt antwoord → ook flashcards.
    - `assignments`: openstaande Canvas-opdrachten van dat vak met deadline (optioneel).
 5. Schrijf het pakket naar `C:\Users\Remzi\OneDrive\Vakwerk\vakwerk-YYYY-MM-DD.json` (map aanmaken als die niet bestaat).
-6. Zeg de gebruiker: op de iPad → Vakwerk → **Importeer** → Bestanden → OneDrive → Vakwerk → bestand kiezen.
+6. **Inbox bijwerken** (zo komt het vanzelf op de iPad): voeg de nieuwe items/plan-blokken samen met het vorige
+   inbox-pakket (`OneDrive\Vakwerk\vakwerk-inbox-bron.json`, samenvoegen op `id` — de inbox moet cumulatief blijven,
+   want een nieuw gekoppeld apparaat krijgt alleen wat erin staat), schrijf dat terug, en versleutel:
+   `node tools/make-inbox.mjs <bron.json> C:\Users\Remzi\OneDrive\Vakwerk\.inbox-sleutel.json`.
+   Commit + push `inbox/*.json`. De app haalt het op zodra de gebruiker hem opent. Het sleutelbestand nooit in de repo zetten.
+7. Zonder inbox: op de iPad → Vakwerk → **Importeer** → Bestanden → OneDrive → Vakwerk → bestand kiezen.
 
 ## Pakketformaat (`vakwerk-pakket`, versie 1)
 

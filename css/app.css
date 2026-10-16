@@ -491,3 +491,5 @@ button:disabled { opacity: .4; cursor: default; }
 .p-time, .p-dur { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--muted); width: 40px; text-align: center; }
 .p-range { flex: 1; min-width: 120px; accent-color: var(--accent); }
 .p-hint { width: 100%; font-size: 12px; color: var(--muted); text-align: center; padding: 0 0 2px; }
+
+.grow-input { flex: 1; min-width: 220px; }
