@@ -39,6 +39,24 @@ Claude levert samenvattingen aan via een **pakketbestand** dat de gebruiker in d
 }
 ```
 
+### Studieplanning (optioneel, in hetzelfde pakket)
+
+```json
+{
+  "planTitle": "Tentamenplanning Q1",
+  "planNotes": ["**Di 20 okt**: ga naar het OT-college …"],
+  "plan": [
+    { "id": "q1-2026-10-16-0", "date": "2026-10-16", "slot": 0, "kind": "study", "subject": "Calculus A",
+      "title": "3.8 + 3.9 Inverse functies", "details": "3.8: 7; p.212: 1, 4 | 9, 21", "important": "4.3 #33" },
+    { "id": "q1-2026-10-28-1", "date": "2026-10-28", "slot": 1, "kind": "exam", "subject": "Organization Theory",
+      "title": "Tentamen Organization Theory 13:45–15:15", "details": "NH 205 / NH 207 · Chromebook" }
+  ]
+}
+```
+
+- `slot`: 0 = ochtend, 1 = middag, 2 = avond. `kind`: `study` (afvinkbaar), `class`, `exam` (geeft een aftelkaart op het dashboard), `rest`.
+- Persoonlijke planningen horen in OneDrive, **niet** in deze (publieke) repo. Lokaal testen kan via `.local-test/` (staat in .gitignore).
+
 - `id` moet stabiel zijn: opnieuw importeren werkt het item bij (voortgang van flashcards en afgevinkte opdrachten blijft bewaard).
 - `subject` wordt gekoppeld aan een vak in de app op naam of op "Naam in Canvas" (aliassen). Onbekende vakken vraagt de app om te koppelen of aan te maken.
 - `due` is lokale tijd `YYYY-MM-DDTHH:MM`.

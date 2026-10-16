@@ -1,7 +1,7 @@
 // Alle data staat lokaal in IndexedDB op de iPad.
 
 const DB_NAME = 'vakwerk';
-const VERSION = 1;
+const VERSION = 2; // v2: studieplanning
 const STORES = {
   subjects: [],
   slots: ['subjectId'],
@@ -11,6 +11,7 @@ const STORES = {
   summaries: ['subjectId'],
   assignments: ['subjectId'],
   cards: ['subjectId'],
+  plan: ['subjectId', 'date'], // studieblokken, colleges en tentamens per dag
   meta: [],
 };
 export const STORE_NAMES = Object.keys(STORES);
@@ -73,7 +74,7 @@ export async function deleteNotebook(id) {
 export async function deleteSubject(id) {
   const notebooks = await db.by('notebooks', 'subjectId', id);
   for (const n of notebooks) await deleteNotebook(n.id);
-  for (const store of ['slots', 'summaries', 'assignments', 'cards']) {
+  for (const store of ['slots', 'summaries', 'assignments', 'cards', 'plan']) {
     const items = await db.by(store, 'subjectId', id);
     await db.delMany(store, items.map(i => i.id));
   }

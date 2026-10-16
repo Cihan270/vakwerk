@@ -26,11 +26,13 @@ export async function importFile(file) {
 
 export async function importPack(data) {
   const items = (data.items || []).filter(i => i && i.subject);
-  if (!items.length) { toast('Er staat niets in dit pakket'); return null; }
+  const plan = (data.plan || []).filter(p => p && p.date && p.title);
+  if (!items.length && !plan.length) { toast('Er staat niets in dit pakket'); return null; }
   let subjects = await db.all('subjects');
 
   // Vakken die nog niet bestaan: laat de gebruiker koppelen of aanmaken
-  const unknown = [...new Set(items.map(i => i.subject))].filter(n => !findSubject(subjects, n));
+  const names = [...items.map(i => i.subject), ...plan.map(p => p.subject).filter(Boolean)];
+  const unknown = [...new Set(names)].filter(n => !findSubject(subjects, n));
   const mapping = {};
   if (unknown.length) {
     const r = await modal({
@@ -57,7 +59,7 @@ export async function importPack(data) {
     }
   }
 
-  const count = { summaries: 0, terms: 0, questions: 0, assignments: 0 };
+  const count = { summaries: 0, terms: 0, questions: 0, assignments: 0, plan: 0 };
   const now = Date.now();
   for (const it of items) {
     const subjectId = mapping[it.subject] || findSubject(subjects, it.subject).id;
@@ -96,7 +98,21 @@ export async function importPack(data) {
       count.assignments++;
     }
   }
+  // Studieplanning: blokken per dag (ochtend/middag/avond), colleges en tentamens. Afgevinkte blokken blijven afgevinkt.
+  for (const p of plan) {
+    const subjectId = p.subject ? (mapping[p.subject] || findSubject(subjects, p.subject)?.id || null) : null;
+    const id = 'pk:' + (p.id || `${p.date}-${p.slot ?? 0}-${slug(p.title)}`);
+    const ex = await db.get('plan', id);
+    await db.put('plan', {
+      id, subjectId, date: p.date, slot: Math.min(2, Math.max(0, +p.slot || 0)), kind: p.kind || 'study',
+      title: p.title, details: p.details || '', important: p.important || '', done: ex?.done || false, source: 'claude',
+    });
+    count.plan++;
+  }
+  if (data.planNotes) await db.put('meta', { id: 'planNotes', value: { title: data.planTitle || 'Planning', notes: data.planNotes } });
+
   const parts = [
+    count.plan && `planning met ${count.plan} blokken`,
     count.summaries && `${count.summaries} samenvatting${count.summaries > 1 ? 'en' : ''}`,
     count.terms && `${count.terms} begrippen`,
     count.questions && `${count.questions} oefenvragen`,

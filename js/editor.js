@@ -1,10 +1,13 @@
 // Notitie-editor: Apple Pencil-invoer, palm rejection, gebaren, lasso, audio-opname en zoom.
 import { db, getSetting, setSetting } from './db.js';
-import { $, $$, esc, uid, icon, debounce, toast, popover, closePopovers, confirmDialog, fmtDuration, fmtDate, saveFile, PEN_COLORS, HL_COLORS } from './util.js';
+import { $, $$, esc, uid, icon, debounce, toast, popover, closePopovers, confirmDialog, menu, fmtDuration, fmtDate, saveFile, PEN_COLORS, HL_COLORS } from './util.js';
 import {
   PAGE_W, PAGE_H, PAPERS, bbox, drawStroke, drawStrokes, drawPaper, paperCss, thumbnail, strokeHit, eraseFromStroke,
   strokesInPoly, translateStroke, unionBox, isScribble, scribbleTargets, recognize, shapePoints, smoothPoints, SMOOTH_LEVELS,
+  BOARD_PAPERS, boardBg, renderFit, contentBounds,
 } from './ink.js';
+
+const ZOOM_MIN = 0.1, ZOOM_MAX = 5; // canvas-modus: 10% – 500%
 
 const MAX_PIXELS = 5.5e6;          // max pixels per canvas (geheugenlimiet iPad Safari)
 const WIDTHS = { pen: [1.6, 2.6, 4.2], hl: [14, 22, 32], eraser: [10, 20, 40] };
@@ -30,6 +33,11 @@ export async function openEditor(root, notebookId, { onExit }) {
     pages = [{ id: uid('p'), notebookId, index: 0, paper: nb.paper || 'lined', strokes: [] }];
     await db.put('pages', pages[0]);
   }
+  // Canvas-modus (Freeform): één oneindig vlak met vrije zoom; pagina-modus: A4-pagina's onder elkaar
+  const board = nb.layout === 'board';
+  if (board) pages = pages.slice(0, 1);
+  const view = { x: -40, y: -40, z: 1, ...(nb.view || {}) };
+  const zf = () => board ? view.z : 1; // lijndiktes blijven even dik op het scherm, hoe ver je ook zoomt
   const recordings = (await db.by('recordings', 'notebookId', notebookId)).sort((a, b) => a.created - b.created);
   const saved = await getSetting('tools', {});
   const T = { ...DEFAULTS, ...saved, pen: { ...DEFAULTS.pen, ...saved.pen }, hl: { ...DEFAULTS.hl, ...saved.hl }, eraser: { ...DEFAULTS.eraser, ...saved.eraser } };
@@ -61,12 +69,12 @@ export async function openEditor(root, notebookId, { onExit }) {
       <div class="ed-right">
         <button class="icon-btn rec-btn" data-a="rec" aria-label="Opnemen">${icon('mic')}<span class="rec-time"></span></button>
         <button class="icon-btn" data-a="recs" aria-label="Opnames">${icon('headphones')}<span class="badge"></span></button>
-        <button class="icon-btn" data-a="page" aria-label="Pagina">${icon('pageplus')}</button>
+        <button class="icon-btn" data-a="page" aria-label="${board ? 'Achtergrond' : 'Pagina'}">${icon(board ? 'grid' : 'pageplus')}</button>
         <button class="icon-btn" data-a="hand" aria-label="Tekenen met vinger">${icon('hand')}</button>
         <button class="icon-btn" data-a="more" aria-label="Instellingen">${icon('sliders')}</button>
       </div>
     </header>
-    <div class="ed-scroll"><div class="ed-pages"></div></div>
+    <div class="ed-scroll${board ? ' board' : ''}"><div class="ed-pages"></div></div>
     <div class="ed-status"><button class="pill zoom-ind" data-a="zoomreset" hidden></button><span class="pill pg-ind"></span></div>
     <div class="ed-player" hidden>
       <button class="icon-btn" data-a="p-back" aria-label="10 seconden terug">${icon('rewind')}</button>
@@ -107,15 +115,39 @@ export async function openEditor(root, notebookId, { onExit }) {
   }
   function styleEl(pg) {
     const st = S.get(pg.id);
+    if (board) { st.el.classList.add('board'); Object.assign(st.el.style, boardBg(pg.paper, view)); return; }
     st.el.style.width = pageW + 'px';
     st.el.style.height = pageH + 'px';
     Object.assign(st.el.style, paperCss(pg.paper, scale));
   }
+  // st.k = pixels per eenheid, st.ox/oy = verschuiving in pixels (alleen in canvas-modus ≠ 0)
   function sizeCanvas(st, c) {
+    if (board) {
+      const cw = scrollEl.clientWidth, ch = scrollEl.clientHeight;
+      const ratio = Math.min(devicePixelRatio || 1, 2, Math.sqrt(MAX_PIXELS / Math.max(1, cw * ch)));
+      const w = Math.round(cw * ratio), h = Math.round(ch * ratio);
+      if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+      st.ratio = ratio;
+      boardTf(st);
+      return;
+    }
     const ratio = Math.min(devicePixelRatio || 1, 2, Math.sqrt(MAX_PIXELS / (pageW * pageH)));
     const w = Math.round(pageW * ratio), h = Math.round(pageH * ratio);
     if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
     st.k = w / PAGE_W;
+    st.ox = st.oy = 0;
+  }
+  function boardTf(st) {
+    st.k = st.ratio * view.z;
+    st.ox = -st.k * view.x;
+    st.oy = -st.k * view.y;
+  }
+  const setT = (ctx, st, dx = 0, dy = 0) => ctx.setTransform(st.k, 0, 0, st.k, st.ox + st.k * dx, st.oy + st.k * dy);
+  // css-pixels per eenheid en verschuiving (voor de selectie-overlay)
+  const cssK = () => board ? view.z : scale;
+  const cssO = () => board ? [-view.x * view.z, -view.y * view.z] : [0, 0];
+  function visibleRect() {
+    return [view.x, view.y, view.x + scrollEl.clientWidth / view.z, view.y + scrollEl.clientHeight / view.z];
   }
   function attach(pg) {
     const st = S.get(pg.id);
@@ -140,8 +172,8 @@ export async function openEditor(root, notebookId, { onExit }) {
     const ctx = st.canvas.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, st.canvas.width, st.canvas.height);
-    ctx.setTransform(st.k, 0, 0, st.k, 0, 0);
-    drawStrokes(ctx, pg.strokes, { fade, skip: drag && sel?.pg === pg ? sel.ids : null });
+    setT(ctx, st);
+    drawStrokes(ctx, pg.strokes, { fade, skip: drag && sel?.pg === pg ? sel.ids : null, cull: board ? visibleRect() : null });
   }
   const renderQueue = new Set();
   let renderRaf = 0;
@@ -158,7 +190,22 @@ export async function openEditor(root, notebookId, { onExit }) {
     }
   }, { root: scrollEl, rootMargin: '120% 0px' });
 
+  function updateZoomInd() {
+    const zi = $('.zoom-ind', ed);
+    const z = board ? view.z : zoom;
+    zi.hidden = !board && Math.abs(zoom - 1) < 0.01;
+    zi.textContent = Math.round(z * 100) + '%';
+  }
   function layout() {
+    if (board) {
+      const pg = pages[0], st = S.get(pg.id);
+      styleEl(pg);
+      if (st.canvas) { sizeCanvas(st, st.canvas); render(pg); } else attach(pg);
+      if (live.parentNode) live.width = live.height = 0, live.remove();
+      positionSelection();
+      updateZoomInd();
+      return;
+    }
     const cw = scrollEl.clientWidth;
     const baseW = Math.max(280, Math.min(cw - 32, 920));
     pageW = Math.round(baseW * zoom);
@@ -171,19 +218,55 @@ export async function openEditor(root, notebookId, { onExit }) {
     }
     if (live.parentNode) live.width = live.height = 0, live.remove();
     positionSelection();
-    const zi = $('.zoom-ind', ed);
-    zi.hidden = Math.abs(zoom - 1) < 0.01;
-    zi.textContent = Math.round(zoom * 100) + '%';
+    updateZoomInd();
   }
 
   function mountPages() {
     pagesEl.innerHTML = '';
-    for (const pg of pages) { const el = buildPageEl(pg); pagesEl.append(el); io.observe(el); }
+    for (const pg of pages) { const el = buildPageEl(pg); pagesEl.append(el); if (!board) io.observe(el); }
   }
   mountPages();
   layout();
 
+  // Canvas-modus: weergave verschuiven/zoomen (z = css-pixels per eenheid; 1 = 100%)
+  const saveView = debounce(() => { nb.view = { ...view }; saveSoon(); }, 500);
+  function setView(x, y, z = view.z) {
+    view.z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+    view.x = x;
+    view.y = y;
+    const pg = pages[0], st = S.get(pg.id);
+    styleEl(pg);
+    if (st.canvas) boardTf(st);
+    renderSoon(pg);
+    positionSelection();
+    updateZoomInd();
+    saveView();
+  }
+  function zoomAt(cx, cy, z) {
+    const r = scrollEl.getBoundingClientRect();
+    const wx = view.x + (cx - r.left) / view.z, wy = view.y + (cy - r.top) / view.z;
+    const nz = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+    setView(wx - (cx - r.left) / nz, wy - (cy - r.top) / nz, nz);
+  }
+  function fitAll() {
+    const b = contentBounds(pages[0].strokes);
+    const cw = scrollEl.clientWidth, ch = scrollEl.clientHeight;
+    if (!b) return setView(-40, -40, 1);
+    const pad = 60;
+    const z = Math.min(2, (cw - pad * 2) / Math.max(1, b[2] - b[0]), (ch - pad * 2) / Math.max(1, b[3] - b[1]));
+    const nz = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+    setView((b[0] + b[2]) / 2 - cw / 2 / nz, (b[1] + b[3]) / 2 - ch / 2 / nz, nz);
+  }
+  if (board) {
+    scrollEl.addEventListener('wheel', e => {
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) zoomAt(e.clientX, e.clientY, view.z * Math.exp(-e.deltaY * 0.01));
+      else setView(view.x + e.deltaX / view.z, view.y + e.deltaY / view.z);
+    }, { passive: false });
+  }
+
   function currentPageIndex() {
+    if (board) return 0;
     const mid = scrollEl.getBoundingClientRect().top + scrollEl.clientHeight / 2;
     let best = 0, bestD = Infinity;
     pages.forEach((pg, i) => {
@@ -193,7 +276,11 @@ export async function openEditor(root, notebookId, { onExit }) {
     });
     return best;
   }
-  function updatePageInd() { $('.pg-ind', ed).textContent = `${currentPageIndex() + 1} / ${pages.length}`; }
+  function updatePageInd() {
+    const el = $('.pg-ind', ed);
+    el.hidden = board;
+    el.textContent = `${currentPageIndex() + 1} / ${pages.length}`;
+  }
   let scrollRaf = 0;
   scrollEl.addEventListener('scroll', () => { if (!scrollRaf) scrollRaf = requestAnimationFrame(() => { scrollRaf = 0; updatePageInd(); }); }, { passive: true });
   updatePageInd();
@@ -296,8 +383,19 @@ export async function openEditor(root, notebookId, { onExit }) {
       case 'more': return moreMenu(b);
     }
   });
-  $('.ed-status', ed).addEventListener('click', e => {
-    if (e.target.closest('[data-a=zoomreset]')) { const i = currentPageIndex(); zoom = 1; layout(); S.get(pages[i].id).el.scrollIntoView({ block: 'start' }); }
+  $('.ed-status', ed).addEventListener('click', async e => {
+    const zb = e.target.closest('[data-a=zoomreset]');
+    if (!zb) return;
+    if (board) {
+      const r = scrollEl.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const v = await menu(zb, [
+        { label: 'Alles in beeld', value: 'fit', icon: 'zoom' },
+        { label: '100%', value: 1 }, { label: '50%', value: 0.5 }, { label: '25%', value: 0.25 }, { label: '200%', value: 2 },
+      ], { align: 'right' });
+      if (v === 'fit') fitAll(); else if (v) zoomAt(cx, cy, v);
+      return;
+    }
+    const i = currentPageIndex(); zoom = 1; layout(); S.get(pages[i].id).el.scrollIntoView({ block: 'start' });
   });
 
   // ---------- Invoer ----------
@@ -309,6 +407,7 @@ export async function openEditor(root, notebookId, { onExit }) {
 
   function toUnit(e, st) {
     const r = st.el.getBoundingClientRect();
+    if (board) return [view.x + (e.clientX - r.left) / view.z, view.y + (e.clientY - r.top) / view.z];
     return [(e.clientX - r.left) / r.width * PAGE_W, (e.clientY - r.top) / r.height * PAGE_H];
   }
   function ensureLive(st) {
@@ -323,29 +422,29 @@ export async function openEditor(root, notebookId, { onExit }) {
     const ctx = live.getContext('2d');
     if (drag && sel) {
       const st = S.get(sel.pg.id);
-      ctx.setTransform(st.k, 0, 0, st.k, st.k * drag.dx, st.k * drag.dy);
+      setT(ctx, st, drag.dx, drag.dy);
       drawStrokes(ctx, sel.pg.strokes.filter(s => sel.ids.has(s.id)));
       return;
     }
     if (!active) return;
     const st = active.st;
-    ctx.setTransform(st.k, 0, 0, st.k, 0, 0);
+    setT(ctx, st);
     if (active.tool === 'pen' || active.tool === 'hl') {
-      if (active.pts.length) drawStroke(ctx, { tool: active.tool, c: T[active.tool].c, w: T[active.tool].w, p: active.shape ? active.pts : smoothPoints(active.pts, T.smooth) });
+      if (active.pts.length) drawStroke(ctx, { tool: active.tool, c: T[active.tool].c, w: active.w, p: active.shape ? active.pts : smoothPoints(active.pts, T.smooth) });
     } else if (active.tool === 'lasso') {
       const p = active.pts;
       ctx.beginPath();
       for (let i = 0; i < p.length; i += 3) i ? ctx.lineTo(p[i], p[i + 1]) : ctx.moveTo(p[i], p[i + 1]);
-      ctx.setLineDash([8, 7]);
-      ctx.lineWidth = 2;
+      ctx.setLineDash([8 / zf(), 7 / zf()]);
+      ctx.lineWidth = 2 / zf();
       ctx.strokeStyle = '#4f6bed';
       ctx.stroke();
       ctx.fillStyle = 'rgba(79,107,237,.06)';
       ctx.fill();
     } else if (active.tool === 'eraser' && active.last) {
       ctx.beginPath();
-      ctx.arc(active.last[0], active.last[1], T.eraser.w / 2, 0, Math.PI * 2);
-      ctx.lineWidth = 1.5;
+      ctx.arc(active.last[0], active.last[1], T.eraser.w / 2 / zf(), 0, Math.PI * 2);
+      ctx.lineWidth = 1.5 / zf();
       ctx.strokeStyle = 'rgba(30,30,40,.5)';
       ctx.fillStyle = 'rgba(255,255,255,.4)';
       ctx.fill();
@@ -355,7 +454,7 @@ export async function openEditor(root, notebookId, { onExit }) {
 
   function addPoint(x, y, pr) {
     const p = active.pts, n = p.length;
-    if (n && Math.hypot(x - p[n - 3], y - p[n - 2]) < 0.45) return;
+    if (n && Math.hypot(x - p[n - 3], y - p[n - 2]) < 0.45 / zf()) return;
     p.push(r1(x), r1(y), r2(pr));
   }
 
@@ -388,7 +487,7 @@ export async function openEditor(root, notebookId, { onExit }) {
   }
 
   function eraseAt(x, y) {
-    const pg = active.pg, r = T.eraser.w / 2;
+    const pg = active.pg, r = T.eraser.w / 2 / zf();
     let changed = false;
     if (T.eraser.mode === 'stroke') {
       const keep = pg.strokes.filter(s => !strokeHit(s, x, y, r));
@@ -426,6 +525,7 @@ export async function openEditor(root, notebookId, { onExit }) {
     const [x, y] = toUnit(e, st);
     active = {
       id: e.pointerId, type, pg, st, tool: T.tool, pts: [], t0: performance.now(),
+      w: (T.tool === 'pen' || T.tool === 'hl') ? r2(T[T.tool].w / zf()) : 0,
       pr: type === 'pen' ? (e.pressure || 0.3) : 0.5,
       recId: rec?.id, recT: rec ? Math.round(performance.now() - rec.start) : undefined,
     };
@@ -445,7 +545,7 @@ export async function openEditor(root, notebookId, { onExit }) {
       const [x, y] = toUnit(ev, active.st);
       if (active.tool === 'eraser') {
         const [lx, ly] = active.last;
-        const d = Math.hypot(x - lx, y - ly), step = Math.max(2, T.eraser.w * 0.35);
+        const d = Math.hypot(x - lx, y - ly), step = Math.max(2, T.eraser.w * 0.35) / zf();
         for (let i = 1, n = Math.ceil(d / step); i <= n; i++) eraseAt(lx + (x - lx) * i / n, ly + (y - ly) * i / n);
         active.last = [x, y];
         continue;
@@ -457,7 +557,7 @@ export async function openEditor(root, notebookId, { onExit }) {
       const pr = active.type === 'pen' ? active.pr * 0.45 + (ev.pressure || 0) * 0.55 : 0.5;
       active.pr = pr;
       addPoint(x, y, pr);
-      if (active.tool === 'pen' && T.hold && holdAnchor && Math.hypot(x - holdAnchor[0], y - holdAnchor[1]) > 5) armHold(x, y);
+      if (active.tool === 'pen' && T.hold && holdAnchor && Math.hypot(x - holdAnchor[0], y - holdAnchor[1]) > 5 / zf()) armHold(x, y);
     }
     if (active.type === 'pen') penAt = Date.now();
     liveSoon();
@@ -496,7 +596,7 @@ export async function openEditor(root, notebookId, { onExit }) {
     if (!a.pts.length || e.type === 'pointercancel' && a.pts.length < 6) { clearLive(); return; }
     const dur = performance.now() - a.t0;
     const [bx0, by0, bx1, by1] = bbox(a.pts);
-    const isTap = dur < 300 && Math.hypot(bx1 - bx0, by1 - by0) < 4;
+    const isTap = dur < 300 && Math.hypot(bx1 - bx0, by1 - by0) < 4 / zf();
     if (player.open && isTap && seekAt(pg, a.pts[0], a.pts[1])) { clearLive(); return; }
     if (a.tool === 'pen' && T.scribble && !a.shape && isScribble(a.pts)) {
       const targets = scribbleTargets(pg.strokes, a.pts);
@@ -512,7 +612,7 @@ export async function openEditor(root, notebookId, { onExit }) {
       }
     }
     const pts = a.shape ? a.pts : smoothPoints(a.pts, T.smooth);
-    const s = { id: uid('s'), tool: a.tool === 'hl' ? 'hl' : 'pen', c: T[a.tool].c, w: T[a.tool].w, p: pts, b: bbox(pts) };
+    const s = { id: uid('s'), tool: a.tool === 'hl' ? 'hl' : 'pen', c: T[a.tool].c, w: a.w, p: pts, b: bbox(pts) };
     if (a.recId) { s.r = a.recId; s.t = a.recT; }
     const before = pg.strokes;
     pg.strokes = [...before, s];
@@ -520,7 +620,7 @@ export async function openEditor(root, notebookId, { onExit }) {
     if (s.tool === 'hl' || fade) render(pg);
     else if (a.st.canvas) {
       const ctx = a.st.canvas.getContext('2d');
-      ctx.setTransform(a.st.k, 0, 0, a.st.k, 0, 0);
+      setT(ctx, a.st);
       drawStroke(ctx, s);
     }
     clearLive();
@@ -544,6 +644,16 @@ export async function openEditor(root, notebookId, { onExit }) {
     if (!gesture || e.touches.length === e.changedTouches.length) gesture = { t: performance.now(), max: 0, moved: false, pts: {} };
     gesture.max = Math.max(gesture.max, all.length);
     for (const t of e.changedTouches) gesture.pts[t.identifier] = [t.clientX, t.clientY];
+    if (board) {
+      // Canvas: geen native scroll; één vinger = schuiven, twee = knijp-zoom + schuiven
+      e.preventDefault();
+      if (all.length >= 2) {
+        if (active?.type === 'touch') { active = null; clearLive(); }
+        pan = null;
+        startBoardPinch(all);
+      } else if (!T.fingerDraw) startPan(all[0]);
+      return;
+    }
     if (all.length === 2) {
       e.preventDefault();
       if (active?.type === 'touch') { active = null; clearLive(); }
@@ -557,11 +667,24 @@ export async function openEditor(root, notebookId, { onExit }) {
       const p0 = gesture.pts[t.identifier];
       if (p0 && Math.hypot(t.clientX - p0[0], t.clientY - p0[1]) > 12) gesture.moved = true;
     }
+    if (board) {
+      e.preventDefault();
+      if (pinch && all.length >= 2) updateBoardPinch(all);
+      else if (pan) {
+        const t = all.find(x => x.identifier === pan.id);
+        if (t) setView(pan.vx - (t.clientX - pan.x) / view.z, pan.vy - (t.clientY - pan.y) / view.z);
+      }
+      return;
+    }
     if (pinch && all.length >= 2) { e.preventDefault(); updatePinch(all); }
     else if (active?.type === 'touch' || drag) e.preventDefault();
   }
   function onTouchEnd(e) {
-    if (pinch && e.touches.length < 2) endPinch();
+    if (board) {
+      if (pinch && e.touches.length < 2) { pinch = null; if (gesture) gesture.moved = true; }
+      if (e.touches.length === 1 && !T.fingerDraw) startPan(e.touches[0]);
+      if (e.touches.length === 0) pan = null;
+    } else if (pinch && e.touches.length < 2) endPinch();
     if (e.touches.length === 0 && gesture) {
       const g = gesture;
       gesture = null;
@@ -579,6 +702,22 @@ export async function openEditor(root, notebookId, { onExit }) {
 
   // ---------- Zoomen ----------
   function centroid(ts) { return [(ts[0].clientX + ts[1].clientX) / 2, (ts[0].clientY + ts[1].clientY) / 2]; }
+  let pan = null;
+  function startPan(t) { pan = { id: t.identifier, x: t.clientX, y: t.clientY, vx: view.x, vy: view.y }; }
+  // Canvas: het wereldpunt onder het midden van je vingers blijft onder je vingers
+  function startBoardPinch(ts) {
+    const c = centroid(ts), r = scrollEl.getBoundingClientRect();
+    pinch = {
+      d0: Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY) || 1, z0: view.z,
+      wx: view.x + (c[0] - r.left) / view.z, wy: view.y + (c[1] - r.top) / view.z,
+    };
+  }
+  function updateBoardPinch(ts) {
+    const c = centroid(ts), r = scrollEl.getBoundingClientRect();
+    const d = Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY);
+    const z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, pinch.z0 * d / pinch.d0));
+    setView(pinch.wx - (c[0] - r.left) / z, pinch.wy - (c[1] - r.top) / z, z);
+  }
   function startPinch(ts) {
     const c = centroid(ts);
     const d = Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY) || 1;
@@ -624,6 +763,7 @@ export async function openEditor(root, notebookId, { onExit }) {
   const ro = new ResizeObserver(() => {
     clearTimeout(resizeT);
     resizeT = setTimeout(() => {
+      if (board) return layout();
       const ratio = scrollEl.scrollTop / Math.max(1, scrollEl.scrollHeight);
       layout();
       scrollEl.scrollTop = ratio * scrollEl.scrollHeight;
@@ -665,14 +805,15 @@ export async function openEditor(root, notebookId, { onExit }) {
     const list = selStrokes();
     if (!list.length) return clearSelection();
     const [x0, y0, x1, y1] = unionBox(list);
-    const pad = 8;
+    const k = cssK(), [ox, oy] = cssO(), pad = 8 / zf();
+    const L = (x0 - pad) * k + ox, Tp = (y0 - pad) * k + oy, B = (y1 + pad) * k + oy;
     Object.assign(sel.box.style, {
-      left: (x0 - pad) * scale + 'px', top: (y0 - pad) * scale + 'px',
-      width: (x1 - x0 + pad * 2) * scale + 'px', height: (y1 - y0 + pad * 2) * scale + 'px', transform: '',
+      left: L + 'px', top: Tp + 'px',
+      width: (x1 - x0 + pad * 2) * k + 'px', height: (y1 - y0 + pad * 2) * k + 'px', transform: '',
     });
-    const top = (y0 - pad) * scale - 52;
-    sel.bar.style.left = Math.max(4, (x0 - pad) * scale) + 'px';
-    sel.bar.style.top = (top < 4 ? (y1 + pad) * scale + 8 : top) + 'px';
+    const top = Tp - 52;
+    sel.bar.style.left = Math.max(4, L) + 'px';
+    sel.bar.style.top = (top < 4 ? B + 8 : top) + 'px';
   }
   function clearSelection() {
     if (!sel) return;
@@ -697,7 +838,7 @@ export async function openEditor(root, notebookId, { onExit }) {
       const [mx, my] = toUnit(ev, st);
       drag.dx = mx - drag.x;
       drag.dy = my - drag.y;
-      sel.box.style.transform = `translate(${drag.dx * scale}px, ${drag.dy * scale}px)`;
+      sel.box.style.transform = `translate(${drag.dx * cssK()}px, ${drag.dy * cssK()}px)`;
       liveSoon();
     };
     const up = ev => {
@@ -733,7 +874,7 @@ export async function openEditor(root, notebookId, { onExit }) {
   }
   function selDuplicate() {
     const pg = sel.pg, before = pg.strokes;
-    const copies = selStrokes().map(s => translateStroke(s, 30, 30, uid('s')));
+    const copies = selStrokes().map(s => translateStroke(s, 30 / zf(), 30 / zf(), uid('s')));
     pg.strokes = [...before, ...copies];
     pushUndo(pg, before, pg.strokes);
     render(pg);
@@ -791,7 +932,42 @@ export async function openEditor(root, notebookId, { onExit }) {
     saveSoon();
     updatePageInd();
   }
+  function boardMenu(anchor) {
+    const pg = pages[0];
+    const pop = popover(anchor, `
+      <div class="menu">
+        <div class="menu-label">Achtergrond</div>
+        <div class="paper-pick four">${BOARD_PAPERS.map(p => `<button class="paper-opt ${p.id === pg.paper ? 'on' : ''}" data-paper="${p.id}"><i class="pp pp-${p.id}"></i><span>${p.label}</span></button>`).join('')}</div>
+        <hr>
+        <button class="menu-item" data-p="fit">${icon('zoom', 18)}<span>Alles in beeld</span></button>
+        <button class="menu-item" data-p="export">${icon('export', 18)}<span>Delen als afbeelding</span></button>
+      </div>`, { align: 'right' });
+    pop.addEventListener('click', e => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if (b.dataset.paper) {
+        pg.paper = nb.paper = b.dataset.paper;
+        styleEl(pg);
+        save(pg);
+        $$('.paper-opt', pop).forEach(o => o.classList.toggle('on', o === b));
+        return;
+      }
+      closePopovers();
+      if (b.dataset.p === 'fit') fitAll();
+      if (b.dataset.p === 'export') exportBoard();
+    });
+  }
+  async function exportBoard() {
+    const strokes = pages[0].strokes;
+    const b = contentBounds(strokes);
+    if (!b) { toast('Er staat nog niets op dit canvas'); return; }
+    const bw = b[2] - b[0], bh = b[3] - b[1], k = Math.min(3, 4000 / Math.max(bw, bh));
+    const c = renderFit(strokes, Math.round(bw * k * 1.08) + 40, Math.round(bh * k * 1.08) + 40, 0.04);
+    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+    saveFile(blob, `${(nb.title || 'canvas').replace(/[\\/:*?"<>|]/g, '-')}.png`);
+  }
   function pageMenu(anchor) {
+    if (board) return boardMenu(anchor);
     const i = currentPageIndex(), pg = pages[i];
     const pop = popover(anchor, `
       <div class="menu">
@@ -846,14 +1022,14 @@ export async function openEditor(root, notebookId, { onExit }) {
       ${row('scribble', 'Krassen om te gummen', 'Zigzag snel over inkt om het weg te halen')}
       ${row('hold', 'Vasthouden voor vormen', 'Pen stilhouden na een lijn of cirkel maakt hem strak. Cirkel om inkt + vasthouden = selecteren')}
       <hr><div class="menu-label">Gebaren</div>
-      <p class="menu-note">Tik met 2 vingers = ongedaan maken · 3 vingers = opnieuw · knijp met 2 vingers = zoomen</p>
+      <p class="menu-note">Tik met 2 vingers = ongedaan maken · 3 vingers = opnieuw · knijp met 2 vingers = zoomen${board ? ' · sleep met 1 vinger = schuiven over het canvas' : ''}</p>
     </div>`, { align: 'right' });
     pop.addEventListener('click', e => {
       const b = e.target.closest('[data-sm]');
       if (!b) return;
       T.smooth = +b.dataset.sm;
       saveTools();
-      $('[data-sm]', pop).forEach(x => x.classList.toggle('on', x === b));
+      $$('[data-sm]', pop).forEach(x => x.classList.toggle('on', x === b));
     });
     pop.addEventListener('change', e => {
       const k = e.target.dataset.k;
@@ -1001,7 +1177,7 @@ export async function openEditor(root, notebookId, { onExit }) {
   });
   // Tik op een lijn → spring naar het moment dat je hem schreef
   function seekAt(pg, x, y) {
-    const hit = [...pg.strokes].reverse().find(s => s.r && strokeHit(s, x, y, 14));
+    const hit = [...pg.strokes].reverse().find(s => s.r && strokeHit(s, x, y, 14 / zf()));
     if (!hit) return false;
     const r = recordings.find(rr => rr.id === hit.r);
     if (!r) return false;
@@ -1038,7 +1214,8 @@ export async function openEditor(root, notebookId, { onExit }) {
     if (player.url) URL.revokeObjectURL(player.url);
     clearSelection();
     await saveSoon.flush();
-    try { nb.thumb = thumbnail(pages[0]); } catch {}
+    try { nb.thumb = board ? renderFit(pages[0].strokes, 240, 339, 0.08).toDataURL('image/jpeg', 0.75) : thumbnail(pages[0]); } catch {}
+    if (board) nb.view = { ...view };
     nb.pageCount = pages.length;
     await db.put('notebooks', nb);
     for (const st of S.values()) if (st.canvas) st.canvas.width = st.canvas.height = 0;

@@ -1,7 +1,7 @@
 // Router en opstarten.
 import { requestPersistence } from './db.js';
 import { toast, closePopovers } from './util.js';
-import { dashboard, subjectView, summaryView, practiceView, settingsView } from './views.js';
+import { dashboard, subjectView, summaryView, practiceView, settingsView, planningView } from './views.js';
 import { openEditor } from './editor.js';
 
 const app = document.getElementById('app');
@@ -26,6 +26,7 @@ async function route() {
       case 'samenvatting': await summaryView(app, parts[1], parts[2]); break;
       case 'oefenen': cleanup = await practiceView(app, parts[1], query === 'alles'); break;
       case 'instellingen': await settingsView(app); break;
+      case 'planning': await planningView(app, parts[1] || null); break;
       default: location.hash = '#/';
     }
   } catch (err) {

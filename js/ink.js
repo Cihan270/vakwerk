@@ -92,10 +92,12 @@ export function drawStroke(ctx, s, alpha = 1) {
 }
 
 // fade: { rec, t } → lijnen uit opname `rec` die na tijd `t` (ms) geschreven zijn worden vaag getekend
-export function drawStrokes(ctx, strokes, { fade, skip } = {}) {
+// cull: [x0,y0,x1,y1] → lijnen buiten dit gebied worden overgeslagen (canvas-modus)
+export function drawStrokes(ctx, strokes, { fade, skip, cull } = {}) {
   const a = s => (fade && s.r === fade.rec && s.t > fade.t) ? 0.16 : 1;
-  for (const s of strokes) if (s.tool === 'hl' && !skip?.has(s.id)) drawStroke(ctx, s, a(s));
-  for (const s of strokes) if (s.tool !== 'hl' && !skip?.has(s.id)) drawStroke(ctx, s, a(s));
+  const vis = s => !skip?.has(s.id) && (!cull || !(s.b[2] + s.w < cull[0] || s.b[0] - s.w > cull[2] || s.b[3] + s.w < cull[1] || s.b[1] - s.w > cull[3]));
+  for (const s of strokes) if (s.tool === 'hl' && vis(s)) drawStroke(ctx, s, a(s));
+  for (const s of strokes) if (s.tool !== 'hl' && vis(s)) drawStroke(ctx, s, a(s));
 }
 
 // ---------- Papier ----------
@@ -126,6 +128,51 @@ export function paperCss(paper, scale) {
     default:
       return { backgroundImage: 'none', backgroundPosition: '', backgroundSize: '', backgroundRepeat: '' };
   }
+}
+
+// ---------- Oneindig canvas (Freeform-stijl) ----------
+export const BOARD_PAPERS = PAPERS.filter(p => p.id !== 'cornell');
+
+// Achtergrond die meeschuift en meeschaalt met de weergave { x, y, z }.
+// Bij ver uitzoomen worden de lijnen 4× zo ruim, zodat het niet één grijze vlek wordt.
+export function boardBg(paper, view) {
+  if (!paper || paper === 'blank') return { backgroundImage: 'none', backgroundPosition: '', backgroundSize: '', backgroundRepeat: '' };
+  let S = (paper === 'lined' ? LINE : GRID) * view.z;
+  while (S < 12) S *= 4;
+  const ox = ((-view.x * view.z) % S + S) % S, oy = ((-view.y * view.z) % S + S) % S;
+  const line = '#d5dde9';
+  if (paper === 'lined') return {
+    backgroundImage: `linear-gradient(to bottom, transparent ${S - 1}px, ${line} ${S - 1}px)`,
+    backgroundSize: `100% ${S}px`, backgroundPosition: `0 ${oy}px`, backgroundRepeat: 'repeat',
+  };
+  if (paper === 'grid') return {
+    backgroundImage: `linear-gradient(to right, transparent ${S - 1}px, #e1e7ef ${S - 1}px), linear-gradient(to bottom, transparent ${S - 1}px, #e1e7ef ${S - 1}px)`,
+    backgroundSize: `${S}px ${S}px`, backgroundPosition: `${ox}px ${oy}px`, backgroundRepeat: 'repeat',
+  };
+  return {
+    backgroundImage: 'radial-gradient(circle, #b7c0cd 1.3px, transparent 1.8px)',
+    backgroundSize: `${S}px ${S}px`, backgroundPosition: `${ox - S / 2}px ${oy - S / 2}px`, backgroundRepeat: 'repeat',
+  };
+}
+
+export function contentBounds(strokes) {
+  return strokes.length ? unionBox(strokes) : null;
+}
+
+// Tekent alle inkt passend in een vak van w×h pixels (thumbnail / export van een canvas)
+export function renderFit(strokes, w, h, pad = 0.06, bg = '#fff') {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+  const b = contentBounds(strokes);
+  if (!b) return c;
+  const bw = Math.max(1, b[2] - b[0]), bh = Math.max(1, b[3] - b[1]);
+  const k = Math.min(w * (1 - 2 * pad) / bw, h * (1 - 2 * pad) / bh, 2.5);
+  ctx.setTransform(k, 0, 0, k, (w - bw * k) / 2 - b[0] * k, (h - bh * k) / 2 - b[1] * k);
+  drawStrokes(ctx, strokes);
+  return c;
 }
 
 // Papier tekenen op canvas (voor thumbnails), in pagina-eenheden

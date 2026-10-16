@@ -3,6 +3,7 @@ import { db, getSetting, setSetting, deleteNotebook, deleteSubject } from './db.
 import {
   $, $$, esc, uid, icon, toast, modal, confirmDialog, menu, pickFile, closePopovers,
   isoDay, weekday, minutes, fmtDate, fmtLongDate, fmtDue, greeting, weekNumber, DAYS, DAYS_SHORT, SUBJECT_COLORS,
+  parseDay, MONTHS, MONTHS_SHORT,
 } from './util.js';
 import { markdown, plainText } from './markdown.js';
 import { GRADES, schedule, isDue, isNew, intervalLabel, newSrs } from './srs.js';
@@ -13,18 +14,174 @@ const KINDS = ['Hoorcollege', 'Werkcollege', 'Practicum', 'Tutorial', 'Zelfstudi
 const go = h => { location.hash = h; };
 
 async function loadAll() {
-  const [subjects, slots, notebooks, summaries, assignments, cards] = await Promise.all(
-    ['subjects', 'slots', 'notebooks', 'summaries', 'assignments', 'cards'].map(s => db.all(s)));
+  const [subjects, slots, notebooks, summaries, assignments, cards, plan] = await Promise.all(
+    ['subjects', 'slots', 'notebooks', 'summaries', 'assignments', 'cards', 'plan'].map(s => db.all(s)));
   subjects.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name));
   const sub = Object.fromEntries(subjects.map(s => [s.id, s]));
-  return { subjects, slots, notebooks, summaries, assignments, cards, sub };
+  plan.sort((a, b) => a.date.localeCompare(b.date) || a.slot - b.slot);
+  return { subjects, slots, notebooks, summaries, assignments, cards, plan, sub };
 }
 
+// ---------- Studieplanning ----------
+const SLOTS = ['Ochtend', 'Middag', 'Avond'];
+const PLAN_KINDS = [
+  { id: 'study', label: 'Studeren' }, { id: 'class', label: 'College' }, { id: 'exam', label: 'Tentamen' }, { id: 'rest', label: 'Vrij' },
+];
+const kindLabel = k => PLAN_KINDS.find(x => x.id === k)?.label || '';
+const daysUntil = iso => Math.round((parseDay(iso) - parseDay(isoDay())) / 864e5);
+
+function planBlock(p, s) {
+  const checkable = p.kind === 'study';
+  const color = p.kind === 'exam' ? 'var(--danger)' : p.kind === 'rest' ? 'var(--muted)' : (s?.color || 'var(--accent)');
+  const tag = p.kind === 'study' ? (s?.name || '') : kindLabel(p.kind);
+  return `<div class="pblk k-${p.kind} ${p.done ? 'done' : ''}" style="--c:${color}">
+    ${checkable ? `<button class="check ${p.done ? 'on' : ''}" data-pdone="${p.id}" aria-label="Afvinken">${p.done ? icon('check', 14) : ''}</button>`
+      : `<span class="pk-ic">${icon(p.kind === 'exam' ? 'flag' : p.kind === 'class' ? 'calendar' : 'clock', 16)}</span>`}
+    <button class="pblk-body" data-plan="${p.id}">
+      <span class="pslot">${SLOTS[p.slot] || ''}${tag ? ' · ' + esc(tag) : ''}</span>
+      <b>${esc(p.title)}</b>
+      ${p.details ? `<small>${esc(p.details)}</small>` : ''}
+      ${p.important ? `<small class="imp"><i>★</i> Belangrijk: ${esc(p.important)}</small>` : ''}
+    </button>
+  </div>`;
+}
+
+function examCards(D) {
+  const today = isoDay();
+  const exams = D.plan.filter(p => p.kind === 'exam' && p.date >= today);
+  if (!exams.length) return '';
+  return `<div class="exam-strip">${exams.map(e => {
+    const s = D.sub[e.subjectId];
+    const blocks = D.plan.filter(p => p.kind === 'study' && p.subjectId && p.subjectId === e.subjectId);
+    const done = blocks.filter(p => p.done).length;
+    const n = daysUntil(e.date);
+    const pct = blocks.length ? Math.round(done / blocks.length * 100) : 0;
+    return `<button class="exam-card" style="--c:${s?.color || 'var(--danger)'}" data-planfilter="${e.subjectId || ''}">
+      <span class="exam-when">${n === 0 ? 'Vandaag' : n === 1 ? 'Morgen' : `Nog ${n} dagen`}</span>
+      <b>${esc(s?.name || e.title)}</b>
+      <small>${fmtDate(e.date)}${(() => { const tm = e.title.match(/\d{1,2}:\d{2}\s*[–-]\s*\d{1,2}:\d{2}/); return tm ? ' · ' + tm[0] : ''; })()}${e.details ? ' · ' + esc(e.details) : ''}</small>
+      ${blocks.length ? `<span class="bar"><i style="width:${pct}%"></i></span><small>${done} van ${blocks.length} blokken af</small>` : ''}
+    </button>`;
+  }).join('')}</div>`;
+}
+
+function planDays(D, { subjectId = null, from = null } = {}) {
+  const today = isoDay();
+  let list = D.plan.filter(p => !subjectId || p.subjectId === subjectId || (p.kind === 'exam' && p.subjectId === subjectId));
+  if (from) list = list.filter(p => p.date >= from);
+  if (!list.length) return '<p class="empty">Nog geen planning.</p>';
+  const byDate = new Map();
+  for (const p of list) { if (!byDate.has(p.date)) byDate.set(p.date, []); byDate.get(p.date).push(p); }
+  let html = '', curWeek = '';
+  for (const [date, items] of byDate) {
+    const d = parseDay(date);
+    const mon = new Date(d); mon.setDate(d.getDate() - (weekday(d) - 1));
+    const wk = isoDay(mon);
+    if (wk !== curWeek) { curWeek = wk; html += `<h3 class="week-title">Week van ${mon.getDate()} ${MONTHS[mon.getMonth()]}</h3>`; }
+    const cells = [0, 1, 2].map(slot => items.filter(p => p.slot === slot).map(p => planBlock(p, D.sub[p.subjectId])).join('') || (subjectId ? '' : '<div class="pblk empty-slot"></div>'));
+    html += `<div class="pday ${date < today ? 'past' : ''} ${date === today ? 'is-today' : ''}" ${date === today ? 'id="vandaag"' : ''}>
+      <div class="pdate"><b>${d.getDate()}</b><small>${DAYS_SHORT[weekday(d) - 1]} ${MONTHS_SHORT[d.getMonth()]}</small>${date === today ? '<span class="tag now-tag">Vandaag</span>' : ''}</div>
+      <div class="pblocks ${subjectId ? 'stack' : ''}">${cells.join('')}</div>
+    </div>`;
+  }
+  return html;
+}
+
+async function togglePlan(id) {
+  const p = await db.get('plan', id);
+  p.done = !p.done;
+  await db.put('plan', p);
+}
+
+async function editPlanItem(p) {
+  const subjects = await db.all('subjects');
+  const isEdit = !!p?.id;
+  const r = await modal({
+    title: isEdit ? 'Planningsblok' : 'Nieuw blok',
+    body: `<label class="field"><span>Wat ga je doen?</span><input name="title" value="${esc(p?.title || '')}" required autocomplete="off"></label>
+      <div class="field-row">
+        <label class="field"><span>Datum</span><input type="date" name="date" value="${esc(p?.date || isoDay())}" required></label>
+        <label class="field"><span>Dagdeel</span><select name="slot">${SLOTS.map((s, i) => `<option value="${i}" ${i === (p?.slot ?? 0) ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
+      </div>
+      <div class="field-row">
+        <label class="field"><span>Vak</span><select name="subjectId"><option value="">— geen —</option>${subjects.map(s => `<option value="${s.id}" ${s.id === p?.subjectId ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
+        <label class="field"><span>Soort</span><select name="kind">${PLAN_KINDS.map(k => `<option value="${k.id}" ${k.id === (p?.kind || 'study') ? 'selected' : ''}>${k.label}</option>`).join('')}</select></label>
+      </div>
+      <label class="field"><span>Details</span><textarea name="details" rows="4">${esc(p?.details || '')}</textarea></label>
+      ${p?.important ? `<p class="muted small">★ Belangrijk: ${esc(p.important)}</p>` : ''}`,
+    actions: isEdit ? [{ label: 'Verwijder', value: 'del', danger: true }, { label: 'Annuleer', value: null }, { label: 'Opslaan', value: 'ok', primary: true }] : undefined,
+  });
+  if (r.action === 'del') { await db.del('plan', p.id); return true; }
+  if (r.action !== 'ok') return false;
+  await db.put('plan', { done: false, important: '', source: 'eigen', ...(p || {}), id: p?.id || uid('b'), title: r.data.title.trim(), date: r.data.date, slot: +r.data.slot, subjectId: r.data.subjectId || null, kind: r.data.kind, details: r.data.details });
+  return true;
+}
+
+// Klikken op blokken/vinkjes, gedeeld door dashboard, planning en vak
+async function handlePlanClick(t, rerender) {
+  const pd = t.closest('[data-pdone]');
+  if (pd) { await togglePlan(pd.dataset.pdone); rerender(); return true; }
+  const pb = t.closest('[data-plan]');
+  if (pb) { if (await editPlanItem(await db.get('plan', pb.dataset.plan))) rerender(); return true; }
+  return false;
+}
+
+export async function planningView(root, subjectId = null) {
+  const D = await loadAll();
+  const meta = await getSetting('planNotes', null);
+  const s = subjectId ? D.sub[subjectId] : null;
+  const withPlan = D.subjects.filter(x => D.plan.some(p => p.subjectId === x.id));
+  root.innerHTML = `
+  <div class="view planning">
+    <header class="topbar sub">
+      <div class="row"><button class="icon-btn" data-a="back" aria-label="Terug">${icon('back')}</button>
+        <div><h1>${esc(meta?.title || 'Planning')}</h1><p class="muted">${D.plan.filter(p => p.kind === 'study' && p.done).length} van ${D.plan.filter(p => p.kind === 'study').length} studieblokken af</p></div></div>
+      <div class="actions"><button class="btn" data-a="addblock">${icon('plus', 18)} Blok</button></div>
+    </header>
+    ${examCards(D)}
+    ${meta?.notes?.length ? `<details class="card plan-notes"><summary><b>Let op</b> <span class="muted">(${meta.notes.length})</span></summary><ul>${meta.notes.map(n => `<li>${markdown(n).replace(/^<p>|<\/p>$/g, '')}</li>`).join('')}</ul></details>` : ''}
+    <div class="chips filter">
+      <a class="chip ${!s ? 'on' : ''}" href="#/planning">Alles</a>
+      ${withPlan.map(x => `<a class="chip ${x.id === subjectId ? 'on' : ''}" style="--c:${x.color}" href="#/planning/${x.id}">${esc(x.name)}</a>`).join('')}
+    </div>
+    <div class="plan-list">${planDays(D, { subjectId })}</div>
+  </div>`;
+  const rerender = () => { const y = scrollY; planningView(root, subjectId).then(() => scrollTo(0, y)); };
+  root.onclick = async e => {
+    if (await handlePlanClick(e.target, rerender)) return;
+    const pf = e.target.closest('[data-planfilter]');
+    if (pf) return go('#/planning' + (pf.dataset.planfilter ? '/' + pf.dataset.planfilter : ''));
+    const a = e.target.closest('[data-a]')?.dataset.a;
+    if (a === 'back') go('#/');
+    if (a === 'addblock') { if (await editPlanItem({ subjectId })) rerender(); }
+  };
+  const t = $('#vandaag', root);
+  if (t) requestAnimationFrame(() => { t.scrollIntoView({ block: 'start' }); scrollBy(0, -12); });
+}
+
+// Vraagt eerst: notitieboek (A4-pagina's) of oneindig canvas (Freeform-stijl), plus de achtergrond
 export async function newNotebook(subjectId, { kind = 'note', title } = {}) {
-  const paper = await getSetting('defaultPaper', 'lined');
+  const lastLayout = await getSetting('lastLayout', 'pages');
+  const defPaper = await getSetting('defaultPaper', 'lined');
+  const defTitle = title || `${kind === 'summary' ? 'Samenvatting' : 'Aantekeningen'} ${fmtDate(isoDay())}`;
+  const r = await modal({
+    title: 'Nieuwe notitie',
+    body: `<label class="field"><span>Titel</span><input name="title" value="${esc(defTitle)}" required autocomplete="off" data-nofocus="1"></label>
+      <div class="layout-pick">
+        <label><input type="radio" name="layout" value="pages" ${lastLayout !== 'board' ? 'checked' : ''}><span>${icon('book', 30)}<b>Notitieboek</b><small>A4-pagina's onder elkaar, zoals GoodNotes</small></span></label>
+        <label><input type="radio" name="layout" value="board" ${lastLayout === 'board' ? 'checked' : ''}><span>${icon('board', 30)}<b>Oneindig canvas</b><small>Vrij in- en uitzoomen, zoals Freeform</small></span></label>
+      </div>
+      <div class="field"><span>Achtergrond</span><div class="paper-pick inline">${PAPERS.map(p => `<label class="paper-opt"><input type="radio" name="paper" value="${p.id}" ${p.id === defPaper ? 'checked' : ''}><i class="pp pp-${p.id}"></i><span>${p.label}</span></label>`).join('')}</div></div>`,
+    actions: [{ label: 'Annuleer', value: null }, { label: 'Maak notitie', value: 'ok', primary: true }],
+  });
+  if (r.action !== 'ok') return;
+  const layout = r.data.layout === 'board' ? 'board' : 'pages';
+  let paper = r.data.paper || defPaper;
+  if (layout === 'board' && paper === 'cornell') paper = 'lined';
+  await setSetting('lastLayout', layout);
   const nb = {
-    id: uid('n'), subjectId, kind, paper, created: Date.now(), updated: Date.now(), pageCount: 1,
-    title: title || `${kind === 'summary' ? 'Samenvatting' : 'Aantekeningen'} ${fmtDate(isoDay())}`,
+    id: uid('n'), subjectId, kind, paper, layout, created: Date.now(), updated: Date.now(), pageCount: 1,
+    title: r.data.title.trim() || defTitle,
   };
   await db.put('notebooks', nb);
   await db.put('pages', { id: uid('p'), notebookId: nb.id, index: 0, paper, strokes: [] });
@@ -101,6 +258,8 @@ export async function dashboard(root) {
   const due = D.cards.filter(c => isDue(c));
   const dueBySub = {};
   due.forEach(c => { dueBySub[c.subjectId] = (dueBySub[c.subjectId] || 0) + 1; });
+  const todayPlan = D.plan.filter(p => p.date === isoDay(now));
+  const nextPlan = D.plan.find(p => p.date > isoDay(now) && p.kind !== 'rest');
   const study = [...D.summaries].sort((a, b) => (a.read - b.read) || (b.date || '').localeCompare(a.date || '') || b.updated - a.updated).slice(0, 4);
 
   const hero = upcoming ? (() => {
@@ -139,11 +298,13 @@ export async function dashboard(root) {
       <div><h1>${greeting(now)}${name ? ', ' + esc(name) : ''}</h1><p class="muted">${fmtLongDate(now)} · week ${weekNumber(now)}</p></div>
       <div class="actions">
         <button class="icon-btn" data-a="search" aria-label="Zoeken">${icon('search')}</button>
+        <button class="btn" data-a="planning">${icon('list', 18)} Planning</button>
         <button class="btn" data-a="import">${icon('import', 18)} Importeer</button>
         <button class="icon-btn" data-a="settings" aria-label="Instellingen">${icon('settings')}</button>
       </div>
     </header>
     ${hero}
+    ${examCards(D)}
     <div class="dash-grid">
       <section class="card">
         <div class="card-h"><h3>${icon('calendar', 18)} Rooster</h3>
@@ -151,6 +312,11 @@ export async function dashboard(root) {
         <div class="sched">${view === 'week' ? weekGrid(D, now) : `<div class="slots">${todayHtml}</div>`}</div>
       </section>
       <div class="col">
+        ${todayPlan.length || nextPlan ? `<section class="card">
+          <div class="card-h"><h3>${icon('list', 18)} ${todayPlan.length ? 'Vandaag studeren' : 'Planning'}</h3><a class="link" href="#/planning">Hele planning →</a></div>
+          ${todayPlan.length ? `<div class="pblocks stack">${todayPlan.map(p => planBlock(p, D.sub[p.subjectId])).join('')}</div>`
+            : `<p class="empty small">Vandaag niets gepland. Volgende: <b>${fmtDate(nextPlan.date)}</b> — ${esc(nextPlan.title)}</p>`}
+        </section>` : ''}
         <section class="card">
           <div class="card-h"><h3>${icon('task', 18)} Deadlines</h3><button class="link" data-a="addtask">+ Opdracht</button></div>
           ${openTasks.length ? `<div class="tasks">${openTasks.slice(0, 6).map(t => taskRow(t, D.sub[t.subjectId], true)).join('')}</div>` : '<p class="empty small">Geen openstaande opdrachten 🎉</p>'}
@@ -196,6 +362,9 @@ export async function dashboard(root) {
 
   root.onclick = async e => {
     const t = e.target;
+    if (await handlePlanClick(t, () => dashboard(root))) return;
+    const pf = t.closest('[data-planfilter]');
+    if (pf) return go('#/planning' + (pf.dataset.planfilter ? '/' + pf.dataset.planfilter : ''));
     const cb = t.closest('[data-done]');
     if (cb) { e.stopPropagation(); await toggleTask(cb.dataset.done); return dashboard(root); }
     const v = t.closest('[data-view]');
@@ -208,6 +377,7 @@ export async function dashboard(root) {
     if (a === 'settings') go('#/instellingen');
     if (a === 'import') doImport();
     if (a === 'search') openSearch();
+    if (a === 'planning') go('#/planning');
     if (a === 'review') go('#/oefenen/all');
     if (a === 'addsubject') { if (await editSubject()) dashboard(root); }
     if (a === 'addtask') { if (await editTask(null)) dashboard(root); }
@@ -267,21 +437,30 @@ const TABS = [
 export async function subjectView(root, id, tab = 'notities') {
   const s = await db.get('subjects', id);
   if (!s) return go('#/');
-  const [slots, notebooks, summaries, tasks, cards] = await Promise.all([
+  const [slots, notebooks, summaries, tasks, cards, plan] = await Promise.all([
     db.by('slots', 'subjectId', id), db.by('notebooks', 'subjectId', id), db.by('summaries', 'subjectId', id),
-    db.by('assignments', 'subjectId', id), db.by('cards', 'subjectId', id)]);
+    db.by('assignments', 'subjectId', id), db.by('cards', 'subjectId', id), db.by('plan', 'subjectId', id)]);
+  plan.sort((a, b) => a.date.localeCompare(b.date) || a.slot - b.slot);
   const nx = nextOccurrences(slots, new Date(), 1)[0];
+  const exam = plan.find(p => p.kind === 'exam' && p.date >= isoDay());
+  const tabs = plan.length ? [...TABS, { id: 'planning', label: 'Planning', icon: 'list' }] : TABS;
   const counts = {
     notities: notebooks.filter(n => n.kind !== 'summary').length,
     samenvattingen: summaries.length + notebooks.filter(n => n.kind === 'summary').length,
     opdrachten: tasks.filter(t => !t.done).length,
     oefenen: cards.filter(c => isDue(c)).length,
+    planning: plan.filter(p => p.kind === 'study' && !p.done && p.date <= isoDay()).length,
   };
   let body = '';
   if (tab === 'notities') body = notesTab(notebooks.filter(n => n.kind !== 'summary'), 'note');
   if (tab === 'samenvattingen') body = summariesTab(summaries, notebooks.filter(n => n.kind === 'summary'));
   if (tab === 'opdrachten') body = tasksTab(tasks, s);
   if (tab === 'oefenen') body = practiceTab(cards, s);
+  if (tab === 'planning') {
+    const done = plan.filter(p => p.kind === 'study' && p.done).length, total = plan.filter(p => p.kind === 'study').length;
+    body = `<div class="row gap wrap"><span class="muted">${done} van ${total} studieblokken af</span><button class="btn small" data-a="newblock">${icon('plus', 16)} Blok</button></div>
+      <div class="plan-list">${planDays({ plan, sub: { [id]: s } }, { subjectId: id })}</div>`;
+  }
 
   root.innerHTML = `
   <div class="view subject" style="--c:${s.color}">
@@ -289,20 +468,22 @@ export async function subjectView(root, id, tab = 'notities') {
       <div class="row">
         <button class="icon-btn" data-a="back" aria-label="Terug">${icon('back')}</button>
         <div><h1><i class="dot big"></i>${esc(s.name)}</h1>
-        <p class="muted">${nx ? `Volgende: ${whenLabel(nx)} · ${esc(nx.slot.kind || '')}${nx.slot.location ? ' · ' + esc(nx.slot.location) : ''}` : 'Niet in je rooster'}</p></div>
+        <p class="muted">${nx ? `Volgende: ${whenLabel(nx)} · ${esc(nx.slot.kind || '')}${nx.slot.location ? ' · ' + esc(nx.slot.location) : ''}` : exam ? '' : 'Niet in je rooster'}${exam ? `${nx ? ' · ' : ''}<span class="exam-inline">${icon('flag', 14)} Tentamen ${fmtDate(exam.date)} (${daysUntil(exam.date) === 0 ? 'vandaag' : `nog ${daysUntil(exam.date)} d`})</span>` : ''}</p></div>
       </div>
       <div class="actions">
         <button class="icon-btn" data-a="search" aria-label="Zoeken">${icon('search')}</button>
         <button class="icon-btn" data-a="more" aria-label="Meer">${icon('more')}</button>
       </div>
     </header>
-    <nav class="tabs">${TABS.map(t => `<a class="tab ${t.id === tab ? 'on' : ''}" href="#/vak/${id}/${t.id}">${icon(t.icon, 18)}<span>${t.label}</span>${counts[t.id] ? `<em>${counts[t.id]}</em>` : ''}</a>`).join('')}</nav>
+    <nav class="tabs">${tabs.map(t => `<a class="tab ${t.id === tab ? 'on' : ''}" href="#/vak/${id}/${t.id}">${icon(t.icon, 18)}<span>${t.label}</span>${counts[t.id] ? `<em>${counts[t.id]}</em>` : ''}</a>`).join('')}</nav>
     <div class="tab-body">${body}</div>
   </div>`;
 
   const rerender = () => subjectView(root, id, tab);
   root.onclick = async e => {
     const t = e.target;
+    if (await handlePlanClick(t, rerender)) return;
+    if (t.closest('[data-a=newblock]')) { if (await editPlanItem({ subjectId: id })) rerender(); return; }
     const nm = t.closest('[data-nbmenu]');
     if (nm) { e.stopPropagation(); return notebookMenu(nm, nm.dataset.nbmenu, rerender); }
     const nb = t.closest('[data-nb]'); if (nb) return go('#/notitie/' + nb.dataset.nb);
@@ -343,8 +524,8 @@ export async function subjectView(root, id, tab = 'notities') {
 
 function notebookCard(n) {
   return `<div class="nb-card" data-nb="${n.id}">
-    <div class="nb-thumb">${n.thumb ? `<img src="${n.thumb}" alt="">` : '<div class="paper-blank"></div>'}${n.hasAudio ? `<span class="nb-audio">${icon('mic', 14)}</span>` : ''}</div>
-    <div class="nb-meta"><b>${esc(n.title)}</b><small>${fmtDate(n.updated || n.created)}${n.pageCount > 1 ? ` · ${n.pageCount} pagina's` : ''}</small></div>
+    <div class="nb-thumb">${n.thumb ? `<img src="${n.thumb}" alt="">` : '<div class="paper-blank"></div>'}${n.hasAudio ? `<span class="nb-audio">${icon('mic', 14)}</span>` : ''}${n.layout === 'board' ? `<span class="nb-kind">${icon('board', 13)} Canvas</span>` : ''}</div>
+    <div class="nb-meta"><b>${esc(n.title)}</b><small>${fmtDate(n.updated || n.created)}${n.layout !== 'board' && n.pageCount > 1 ? ` · ${n.pageCount} pagina's` : ''}</small></div>
     <button class="icon-btn small nb-more" data-nbmenu="${n.id}" aria-label="Opties">${icon('more', 18)}</button>
   </div>`;
 }
