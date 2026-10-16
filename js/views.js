@@ -3,7 +3,7 @@ import { db, getSetting, setSetting, deleteNotebook, deleteSubject } from './db.
 import {
   $, $$, esc, uid, icon, toast, modal, confirmDialog, menu, pickFile, closePopovers,
   isoDay, weekday, minutes, fmtDate, fmtLongDate, fmtDue, greeting, weekNumber, DAYS, DAYS_SHORT, SUBJECT_COLORS,
-  parseDay, MONTHS, MONTHS_SHORT,
+  parseDay, MONTHS, MONTHS_SHORT, APP_VERSION,
 } from './util.js';
 import { markdown, plainText } from './markdown.js';
 import { GRADES, schedule, isDue, isNew, intervalLabel, newSrs } from './srs.js';
@@ -916,7 +916,7 @@ export async function settingsView(root) {
         <button class="btn danger" data-a="wipe">${icon('trash', 18)} Alles wissen</button>
       </div>
     </section>
-    <p class="muted small center">Vakwerk v2 · je data blijft op dit apparaat</p>
+    <p class="muted small center">Vakwerk ${APP_VERSION} · je data blijft op dit apparaat</p>
   </div>`;
 
   const rerender = () => settingsView(root);

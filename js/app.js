@@ -50,15 +50,16 @@ requestPersistence();
 // Offline: service worker
 if ('serviceWorker' in navigator && !['localhost', '127.0.0.1'].includes(location.hostname)) {
   navigator.serviceWorker.register('./sw.js').then(reg => {
-    reg.addEventListener('updatefound', () => {
-      const w = reg.installing;
-      w?.addEventListener('statechange', () => {
-        if (w.state === 'installed' && navigator.serviceWorker.controller) {
-          toast('Er is een nieuwe versie van Vakwerk', { action: 'Vernieuwen', onAction: () => w.postMessage('skipWaiting') });
-        }
-      });
-    });
+    // Elke keer dat je de app weer opent: kijken of er een nieuwe versie is
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
   });
-  let reloaded = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded) { reloaded = true; location.reload(); } });
+  // Nieuwe versie actief → herladen, behalve midden in een notitie (dan pas als je hem sluit)
+  let reloaded = false, pending = false;
+  const reloadNow = () => { if (!reloaded) { reloaded = true; location.reload(); } };
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!document.body.classList.contains('in-editor')) return reloadNow();
+    pending = true;
+    toast('Nieuwe versie van Vakwerk klaar — wordt geladen zodra je deze notitie sluit');
+  });
+  window.addEventListener('hashchange', () => { if (pending && !location.hash.startsWith('#/notitie')) reloadNow(); });
 }

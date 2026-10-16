@@ -1,5 +1,5 @@
 // Service worker: houdt de app offline beschikbaar. Verhoog VERSION bij elke release.
-const VERSION = 'vakwerk-v5';
+const VERSION = 'vakwerk-v6';
 const ASSETS = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/app.js', './js/db.js', './js/util.js', './js/views.js', './js/editor.js', './js/ink.js',
@@ -8,7 +8,8 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(ASSETS)));
+  // Nieuwe versie direct actief maken; de app herlaadt zichzelf dan (zie app.js)
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(ASSETS.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
