@@ -7,7 +7,7 @@ import {
 } from './util.js';
 import { markdown, plainText } from './markdown.js';
 import { GRADES, schedule, isDue, isNew, intervalLabel, newSrs } from './srs.js';
-import { importFile, exportBackup, seedDemo } from './pack.js';
+import { importFile, exportBackup, seedDemo, removeDemo, wipeAll, isDemoSubject } from './pack.js';
 import { PAPERS } from './ink.js';
 
 const KINDS = ['Hoorcollege', 'Werkcollege', 'Practicum', 'Tutorial', 'Zelfstudie', 'Tentamen', 'Overig'];
@@ -303,6 +303,7 @@ export async function dashboard(root) {
         <button class="icon-btn" data-a="settings" aria-label="Instellingen">${icon('settings')}</button>
       </div>
     </header>
+    ${D.subjects.some(isDemoSubject) ? `<div class="demo-banner">${icon('sparkle', 18)}<span>Je kijkt naar <b>voorbeelddata</b>. Klaar met rondkijken?</span><button class="btn small" data-a="removedemo">Voorbeelddata verwijderen</button></div>` : ''}
     ${hero}
     ${examCards(D)}
     <div class="dash-grid">
@@ -378,6 +379,7 @@ export async function dashboard(root) {
     if (a === 'import') doImport();
     if (a === 'search') openSearch();
     if (a === 'planning') go('#/planning');
+    if (a === 'removedemo') { if (await removeDemo()) dashboard(root); }
     if (a === 'review') go('#/oefenen/all');
     if (a === 'addsubject') { if (await editSubject()) dashboard(root); }
     if (a === 'addtask') { if (await editTask(null)) dashboard(root); }
@@ -890,7 +892,15 @@ export async function settingsView(root) {
         <li><b>Opnemen:</b> tijdens het opnemen onthoudt elke lijn wanneer je hem schreef. Tik er later op om terug te luisteren.</li>
       </ul>
     </section>
-    <p class="muted small center">Vakwerk v1 · je data blijft op dit apparaat</p>
+    <section class="card">
+      <h3>Opnieuw beginnen</h3>
+      <p class="muted">Haal de voorbeelddata weg, of wis alles en begin met een lege app.</p>
+      <div class="row gap wrap">
+        ${D.subjects.some(isDemoSubject) ? `<button class="btn" data-a="removedemo">${icon('sparkle', 18)} Voorbeelddata verwijderen</button>` : ''}
+        <button class="btn danger" data-a="wipe">${icon('trash', 18)} Alles wissen</button>
+      </div>
+    </section>
+    <p class="muted small center">Vakwerk v2 · je data blijft op dit apparaat</p>
   </div>`;
 
   const rerender = () => settingsView(root);
@@ -915,6 +925,8 @@ export async function settingsView(root) {
       case 'import': return doImport();
       case 'backup': return exportBackup();
       case 'restore': return doImport();
+      case 'removedemo': if (await removeDemo()) rerender(); return;
+      case 'wipe': if (await wipeAll()) go('#/'); return;
     }
   };
   $('[data-set=name]', root).addEventListener('change', e => setSetting('name', e.target.value.trim()));

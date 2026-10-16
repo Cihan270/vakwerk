@@ -1,5 +1,5 @@
 // Import van studiepakketten (samenvattingen die Claude uit Canvas maakt) en back-ups.
-import { db, STORE_NAMES } from './db.js';
+import { db, STORE_NAMES, deleteSubject } from './db.js';
 import { esc, uid, isoDay, modal, confirmDialog, toast, saveFile, SUBJECT_COLORS } from './util.js';
 import { newSrs } from './srs.js';
 
@@ -151,8 +151,27 @@ export async function restoreBackup(data) {
 }
 
 // ---------- Voorbeelddata ----------
+const DEMO_NAMES = ['Calculus 1A', 'Programmeren 1', 'Thermodynamica'];
+export const isDemoSubject = s => s.demo || DEMO_NAMES.includes(s.name);
+
+export async function removeDemo() {
+  const demo = (await db.all('subjects')).filter(isDemoSubject);
+  if (!demo.length) return false;
+  if (!await confirmDialog(`De voorbeeldvakken ${demo.map(s => `"${s.name}"`).join(', ')} verwijderen, met alles wat erbij hoort?`, { ok: 'Verwijder voorbeelddata', title: 'Voorbeelddata verwijderen' })) return false;
+  for (const s of demo) await deleteSubject(s.id);
+  toast('Voorbeelddata verwijderd');
+  return true;
+}
+
+export async function wipeAll() {
+  if (!await confirmDialog('Alle vakken, notities, opnames, samenvattingen, opdrachten, flashcards en je planning worden van deze iPad verwijderd. Maak eerst een back-up als je iets wilt bewaren.', { ok: 'Alles wissen', title: 'Opnieuw beginnen' })) return false;
+  for (const s of STORE_NAMES) await db.clear(s);
+  toast('Alles gewist — je begint opnieuw');
+  return true;
+}
+
 export async function seedDemo() {
-  const mk = (name, color, aliases = []) => ({ id: uid('v'), name, color, aliases, created: Date.now(), order: 0 });
+  const mk = (name, color, aliases = []) => ({ id: uid('v'), name, color, aliases, created: Date.now(), order: 0, demo: true });
   const calc = mk('Calculus 1A', SUBJECT_COLORS[0], ['Calculus 1A (202400123)']);
   const prog = mk('Programmeren 1', SUBJECT_COLORS[2]);
   const thermo = mk('Thermodynamica', SUBJECT_COLORS[3]);
