@@ -46,7 +46,9 @@ async function checkArtifactInbox() {
     let pack;
     try { pack = typeof d.pack === 'string' ? JSON.parse(d.pack) : d.pack; } catch { continue; }
     toast('Nieuwe gegevens van Claude worden geladen…', { ms: 2500 });
-    const res = await importPack(pack);
+    let res;
+    try { res = await importPack(pack); }
+    catch (e) { toast('Nog niet alles van Claude is binnen — de app probeert het de volgende keer verder'); return last; }
     if (!res) continue;
     try { await store.collection('inbox').doc(d.docId).update({ imported: true, importedAt: new Date().toISOString() }); } catch {}
     await setSetting('inboxImportedAt', Date.now());

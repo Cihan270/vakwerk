@@ -69,12 +69,13 @@ async function pool(items, fn, n = 6) {
   await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) { const k = i++; out[k] = await fn(items[k]); } }));
   return out;
 }
+// De database begrenst hoeveel je tegelijk/per seconde schrijft: bij 'druk' rustig opnieuw proberen (tot ~30 s)
 async function retry(fn) {
   for (let a = 0; ; a++) {
     try { return await fn(); }
     catch (e) {
-      if (a >= 3 || !['unavailable', 'resource_exhausted'].includes(e?.code)) throw e;
-      await new Promise(r => setTimeout(r, 300 * (a + 1) + Math.random() * 300));
+      if (a >= 6 || !['unavailable', 'resource_exhausted'].includes(e?.code)) { console.warn('db', e?.code, e?.message); throw e; }
+      await new Promise(r => setTimeout(r, 500 * 2 ** a + Math.random() * 400));
     }
   }
 }
@@ -111,7 +112,7 @@ function artifactBackend(store) {
       if (written.get(key) === json) return;
       await retry(() => store.collection('inkchunks').doc(key).set({ pageId: p.id, k, strokes: g }));
       written.set(key, json);
-    }, 3);
+    }, 2);
     const prev = await retry(() => store.collection('pages').doc(p.id).get());
     const oldCount = prev.exists ? (prev.data().chunks || 0) : 0;
     await retry(() => store.collection('pages').doc(p.id).set({ ...rest, chunks: groups.length }));
@@ -153,18 +154,18 @@ function artifactBackend(store) {
       if (s === 'meta') meta.set(obj.id, clean(obj));
       return obj;
     },
-    async putMany(s, arr) { await pool(arr, o => api.put(s, o)); },
+    async putMany(s, arr) { await pool(arr, o => api.put(s, o), 2); },
     async del(s, id) {
       if (s === 'recordings') return;
       if (s === 'pages') return delPage(id);
       await retry(() => store.collection(s).doc(id).delete());
       if (s === 'meta') meta.delete(id);
     },
-    async delMany(s, ids) { await pool(ids, id => api.del(s, id)); },
+    async delMany(s, ids) { await pool(ids, id => api.del(s, id), 2); },
     async clear(s) {
       if (s === 'recordings') return;
       const rows = await list(s);
-      await pool(rows.map(r => r.id), id => api.del(s, id));
+      await pool(rows.map(r => r.id), id => api.del(s, id), 2);
     },
     raw: store,
   };

@@ -19,6 +19,8 @@ Claude levert samenvattingen aan via een **pakketbestand** dat de gebruiker in d
    want een nieuw gekoppeld apparaat krijgt alleen wat erin staat), schrijf dat terug, en versleutel:
    `node tools/make-inbox.mjs <bron.json> C:\Users\Remzi\OneDrive\Vakwerk\.inbox-sleutel.json`.
    Commit + push `inbox/*.json`. De app haalt het op zodra de gebruiker hem opent. Het sleutelbestand nooit in de repo zetten.
+   **Artifact-versie** (https://claude.ai/artifact/JiLbFoZxwcpkfcdLSx4uhQ): schrijf met ArtifactData een document
+   `inbox/<id>` met `{ pack: "<pakket als JSON-string>", created }`; de app importeert het bij openen.
 7. Zonder inbox: op de iPad → Vakwerk → **Importeer** → Bestanden → OneDrive → Vakwerk → bestand kiezen.
 
 ## Pakketformaat (`vakwerk-pakket`, versie 1)
