@@ -1,5 +1,5 @@
 // Notitie-editor: Apple Pencil-invoer, palm rejection, gebaren, lasso, audio-opname en zoom.
-import { db, getSetting, setSetting } from './db.js';
+import { db, getSetting, setSetting, RUNTIME } from './db.js';
 import { $, $$, esc, uid, icon, debounce, toast, popover, closePopovers, confirmDialog, menu, fmtDuration, fmtDate, saveFile, PEN_COLORS, HL_COLORS } from './util.js';
 import {
   PAGE_W, PAGE_H, PAPERS, bbox, drawStroke, drawStrokes, drawPaper, paperCss, thumbnail, strokeHit, eraseFromStroke,
@@ -1045,8 +1045,9 @@ export async function openEditor(root, notebookId, { onExit }) {
     const b = $('[data-a=rec]', ed);
     b.classList.toggle('recording', !!rec);
     b.innerHTML = rec ? `${icon('stop')}<span class="rec-time">${fmtDuration(performance.now() - rec.start)}</span>` : icon('mic');
+    b.hidden = RUNTIME.sandbox; // een artifact krijgt geen microfoon
     const rb = $('[data-a=recs]', ed);
-    rb.hidden = !recordings.length;
+    rb.hidden = RUNTIME.sandbox || !recordings.length;
     $('.badge', rb).textContent = recordings.length > 1 ? recordings.length : '';
   }
   updateRecUi();

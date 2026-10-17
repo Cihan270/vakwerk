@@ -1,5 +1,5 @@
 // Schermen: dashboard, vak, samenvatting, oefenen, instellingen en zoeken.
-import { db, getSetting, setSetting, deleteNotebook, deleteSubject } from './db.js';
+import { db, getSetting, setSetting, deleteNotebook, deleteSubject, RUNTIME } from './db.js';
 import {
   $, $$, esc, uid, icon, toast, modal, confirmDialog, menu, pickFile, closePopovers,
   isoDay, weekday, minutes, fmtDate, fmtLongDate, fmtDue, greeting, weekNumber, DAYS, DAYS_SHORT, SUBJECT_COLORS,
@@ -857,7 +857,7 @@ export async function settingsView(root) {
   <div class="view settings">
     <header class="topbar sub"><div class="row"><button class="icon-btn" data-a="back" aria-label="Terug">${icon('back')}</button><h1>Instellingen</h1></div></header>
 
-    ${standalone ? '' : `<section class="card notice"><h3>📲 Zet Vakwerk op je beginscherm</h3><p>Open deze pagina in <b>Safari</b> en tik op het deel-icoon <b>⬆︎</b> en dan <b>"Zet op beginscherm"</b>. Dan werkt de app schermvullend en offline, en blijven je notities veilig bewaard.</p></section>`}
+    ${standalone || RUNTIME.sandbox ? '' : `<section class="card notice"><h3>📲 Zet Vakwerk op je beginscherm</h3><p>Open deze pagina in <b>Safari</b> en tik op het deel-icoon <b>⬆︎</b> en dan <b>"Zet op beginscherm"</b>. Dan werkt de app schermvullend en offline, en blijven je notities veilig bewaard.</p></section>`}
 
     <section class="card">
       <div class="card-h"><h3>Vakken</h3><button class="btn small" data-a="addsubject">${icon('plus', 16)} Vak</button></div>
@@ -885,7 +885,7 @@ export async function settingsView(root) {
 
     <section class="card">
       <h3>Inbox van Claude</h3>
-      ${inboxUrl
+      ${RUNTIME.artifact ? `<p class="muted">Deze versie draait als artifact op claude.ai. Alles staat in de database van het artifact: je ziet hetzelfde op je iPad en je laptop, en Claude zet nieuwe samenvattingen, planning en deadlines er direct in.${inboxAt ? ` Laatst binnengekomen: ${fmtDate(inboxAt)} ${new Date(inboxAt).toTimeString().slice(0, 5)}.` : ''}</p><div class="row gap wrap"><button class="btn primary" data-a="inboxpull">${icon('import', 18)} Nu ophalen</button></div>` : RUNTIME.sandbox ? '<p class="muted">Opslaan in het artifact lukt nu niet (ben je ingelogd?). Je gegevens staan tijdelijk alleen in deze browser.</p>' : inboxUrl
         ? `<p class="muted">Gekoppeld ✓ — alles wat Claude voor je klaarzet (samenvattingen, planning, deadlines) komt vanzelf binnen als je de app opent.${inboxAt ? ` Laatst binnengekomen: ${fmtDate(inboxAt)} ${new Date(inboxAt).toTimeString().slice(0, 5)}.` : ''}</p>
            <div class="row gap wrap"><button class="btn primary" data-a="inboxpull">${icon('import', 18)} Nu ophalen</button><button class="btn ghost" data-a="inboxoff">Ontkoppelen</button></div>`
         : `<p class="muted">Plak hier de koppel-link die Claude je gaf. Daarna komt alles vanzelf binnen, zonder importeren.</p>
@@ -900,7 +900,7 @@ export async function settingsView(root) {
 
     <section class="card">
       <h3>Back-up</h3>
-      <p class="muted">Alles staat alleen op deze iPad. Maak af en toe een back-up naar Bestanden, iCloud of OneDrive, inclusief alle inkt en opnames.</p>
+      <p class="muted">${RUNTIME.artifact ? 'Je gegevens staan in dit artifact op claude.ai.' : 'Alles staat alleen op deze iPad.'} Maak af en toe een back-up naar Bestanden, iCloud of OneDrive, inclusief alle inkt en opnames.</p>
       <div class="row gap wrap">
         <button class="btn" data-a="backup">${icon('export', 18)} Maak back-up</button>
         <button class="btn ghost" data-a="restore">${icon('import', 18)} Zet back-up terug</button>

@@ -1,5 +1,5 @@
 // Router en opstarten.
-import { requestPersistence } from './db.js';
+import { requestPersistence, RUNTIME } from './db.js';
 import { toast, closePopovers } from './util.js';
 import { dashboard, subjectView, summaryView, practiceView, settingsView, planningView } from './views.js';
 import { openEditor } from './editor.js';
@@ -9,6 +9,7 @@ import { checkInbox, connectInbox } from './inbox.js';
 const app = document.getElementById('app');
 let cleanup = null;
 let seq = 0;
+let backHash = '#/'; // waar 'terug' uit een notitie naartoe gaat (geen history.back: in een artifact kan dat de claude.ai-pagina verlaten)
 
 async function route() {
   const my = ++seq;
@@ -18,6 +19,7 @@ async function route() {
   const [path, query] = (location.hash.replace(/^#/, '') || '/').split('?');
   const parts = path.split('/').filter(Boolean).map(decodeURIComponent);
   app.onclick = null;
+  if (parts[0] !== 'notitie') backHash = location.hash || '#/';
   document.body.classList.toggle('in-editor', parts[0] === 'notitie');
   window.scrollTo(0, 0);
   try {
@@ -27,7 +29,7 @@ async function route() {
     switch (parts[0]) {
       case undefined: await dashboard(app); break;
       case 'vak': await subjectView(app, parts[1], parts[2]); break;
-      case 'notitie': cleanup = await openEditor(app, parts[1], { onExit: () => { cleanup = null; history.length > 1 ? history.back() : (location.hash = '#/'); } }); break;
+      case 'notitie': cleanup = await openEditor(app, parts[1], { onExit: () => { cleanup = null; location.hash = backHash; } }); break;
       case 'samenvatting': await summaryView(app, parts[1], parts[2]); break;
       case 'oefenen': cleanup = await practiceView(app, parts[1], query === 'alles'); break;
       case 'instellingen': await settingsView(app); break;
@@ -61,8 +63,10 @@ if (!location.hash.startsWith('#/koppel')) pullInbox();
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') pullInbox(); });
 
 // Offline: service worker
-if ('serviceWorker' in navigator && !['localhost', '127.0.0.1'].includes(location.hostname)) {
-  navigator.serviceWorker.register('./sw.js').then(reg => {
+// Alleen op de echte site (GitHub Pages); lokaal en in een claude.ai-artifact werkt een service worker niet
+if ('serviceWorker' in navigator && !RUNTIME.sandbox && location.hostname.endsWith('github.io')) {
+  navigator.serviceWorker.register('./sw.js').catch(() => null).then(reg => {
+    if (!reg) return;
     // Elke keer dat je de app weer opent: kijken of er een nieuwe versie is
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
   });

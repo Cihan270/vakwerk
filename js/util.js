@@ -1,5 +1,5 @@
 // Kleine hulpfuncties: DOM, datums, iconen, dialogen en meldingen.
-export const APP_VERSION = 'v7'; // gelijk houden met VERSION in sw.js
+export const APP_VERSION = 'v8'; // gelijk houden met VERSION in sw.js
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -230,6 +230,13 @@ export function pickFile(accept = '') {
 }
 
 export async function saveFile(blob, filename) {
+  // In een claude.ai-artifact: via de download-functie van de viewer (die vraagt zelf om bevestiging)
+  if (typeof window.claude?.use === 'function') {
+    const dl = await window.claude.use('downloads').catch(() => null);
+    if (!dl) { toast('Opslaan als bestand kan hier niet'); return false; }
+    try { await dl.save({ filename, data: blob }); return true; }
+    catch (e) { if (e?.code !== 'declined') toast('Opslaan lukte niet'); return false; }
+  }
   const file = new File([blob], filename, { type: blob.type });
   if (navigator.canShare?.({ files: [file] })) {
     try { await navigator.share({ files: [file], title: filename }); return true; }

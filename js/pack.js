@@ -73,6 +73,10 @@ export async function importPack(data) {
     }
   }
 
+  // Eerst alles in één keer lezen, daarna alles in één keer wegschrijven (snel, ook in de artifact-database)
+  const byId = async s => new Map((await db.all(s)).map(x => [x.id, x]));
+  const [exSum, exCards, exTasks, exPlan] = await Promise.all(['summaries', 'cards', 'assignments', 'plan'].map(byId));
+  const out = { summaries: [], cards: [], assignments: [], plan: [] };
   const count = { summaries: 0, terms: 0, questions: 0, assignments: 0, plan: 0 };
   const now = Date.now();
   for (const it of items) {
@@ -83,8 +87,8 @@ export async function importPack(data) {
 
     if (it.summary || terms.length || questions.length) {
       const id = 'pk:' + key;
-      const old = await db.get('summaries', id);
-      await db.put('summaries', {
+      const old = exSum.get(id);
+      out.summaries.push({
         id, subjectId, title: it.title || 'Samenvatting', date: it.date || isoDay(), lecture: it.lecture || '',
         markdown: it.summary || '', terms, questions, sources: it.sources || [], source: 'claude',
         created: old?.created || now, updated: now, read: old?.read && old.markdown === (it.summary || '') ? true : false,
@@ -95,8 +99,8 @@ export async function importPack(data) {
         ...questions.map((q, i) => ({ id: `pk:${key}:q:${i}`, front: q.question, back: q.answer, kind: 'vraag' })),
       ];
       for (const c of cards) {
-        const ex = await db.get('cards', c.id);
-        await db.put('cards', { ...c, subjectId, summaryId: id, srs: ex?.srs || { ...newSrs(), due: now }, created: ex?.created || now });
+        const ex = exCards.get(c.id);
+        out.cards.push({ ...c, subjectId, summaryId: id, srs: ex?.srs || { ...newSrs(), due: now }, created: ex?.created || now });
       }
       count.terms += terms.length;
       count.questions += questions.length;
@@ -104,8 +108,8 @@ export async function importPack(data) {
     for (const a of it.assignments || []) {
       if (!a.title) continue;
       const id = 'pk:' + (a.id || `${key}:${slug(a.title)}`);
-      const ex = await db.get('assignments', id);
-      await db.put('assignments', {
+      const ex = exTasks.get(id);
+      out.assignments.push({
         id, subjectId, title: a.title, due: a.due || '', notes: a.notes || a.description || '', url: a.url || '',
         done: ex?.done || false, source: 'claude', created: ex?.created || now,
       });
@@ -116,16 +120,17 @@ export async function importPack(data) {
   for (const p of plan) {
     const subjectId = p.subject ? (mapping[p.subject] || findSubject(subjects, p.subject)?.id || null) : null;
     const id = 'pk:' + (p.id || `${p.date}-${p.slot ?? 0}-${slug(p.title)}`);
-    const ex = await db.get('plan', id);
+    const ex = exPlan.get(id);
     // Al doorgeschoven? Dan blijft de nieuwe plek staan.
     const keepPos = ex?.movedFrom;
-    await db.put('plan', {
+    out.plan.push({
       id, subjectId, date: keepPos ? ex.date : p.date, slot: keepPos ? ex.slot : Math.min(2, Math.max(0, +p.slot || 0)), kind: p.kind || 'study',
       title: p.title, details: p.details || '', important: p.important || '', done: ex?.done || false, source: 'claude',
       ...(keepPos ? { movedFrom: ex.movedFrom } : {}), ...(ex?.keep ? { keep: true } : {}),
     });
     count.plan++;
   }
+  for (const [s, arr] of Object.entries(out)) if (arr.length) await db.putMany(s, arr);
   if (data.planNotes) await db.put('meta', { id: 'planNotes', value: { title: data.planTitle || 'Planning', notes: data.planNotes } });
 
   const parts = [
