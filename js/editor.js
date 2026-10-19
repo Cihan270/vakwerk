@@ -1,6 +1,6 @@
 // Notitie-editor: Apple Pencil-invoer, palm rejection, gebaren, lasso, audio-opname en zoom.
 import { db, getSetting, setSetting, RUNTIME } from './db.js';
-import { $, $$, esc, uid, icon, debounce, toast, popover, closePopovers, confirmDialog, menu, fmtDuration, fmtDate, saveFile, PEN_COLORS, HL_COLORS } from './util.js';
+import { $, $$, esc, uid, icon, debounce, toast, popover, closePopovers, confirmDialog, menu, pickFile, fmtDuration, fmtDate, saveFile, PEN_COLORS, HL_COLORS } from './util.js';
 import {
   PAGE_W, PAGE_H, PAPERS, bbox, drawStroke, drawStrokes, drawPaper, paperCss, thumbnail, strokeHit, eraseFromStroke,
   strokesInPoly, translateStroke, unionBox, isScribble, scribbleTargets, recognize, shapePoints, smoothPoints, SMOOTH_LEVELS,
@@ -20,6 +20,7 @@ const DEFAULTS = {
   scribble: true,
   hold: true,
   smooth: 1,
+  dark: false, // donker papier, lichte inkt
 };
 const r1 = v => Math.round(v * 10) / 10;
 const r2 = v => Math.round(v * 100) / 100;
@@ -44,7 +45,7 @@ export async function openEditor(root, notebookId, { onExit }) {
   const saveTools = debounce(() => setSetting('tools', T), 400);
 
   root.innerHTML = `
-  <div class="editor" style="--subject:${esc(subject?.color || '#4f6bed')}">
+  <div class="editor${T.dark ? ' dark' : ''}" style="--subject:${esc(subject?.color || '#4f6bed')}">
     <header class="ed-bar">
       <div class="ed-left">
         <button class="icon-btn" data-a="back" aria-label="Terug">${icon('back')}</button>
@@ -115,10 +116,11 @@ export async function openEditor(root, notebookId, { onExit }) {
   }
   function styleEl(pg) {
     const st = S.get(pg.id);
-    if (board) { st.el.classList.add('board'); Object.assign(st.el.style, boardBg(pg.paper, view)); return; }
+    if (board) { st.el.classList.add('board'); Object.assign(st.el.style, boardBg(pg.paper, view, T.dark)); placeImages(pg); return; }
     st.el.style.width = pageW + 'px';
     st.el.style.height = pageH + 'px';
-    Object.assign(st.el.style, paperCss(pg.paper, scale));
+    Object.assign(st.el.style, paperCss(pg.paper, scale, T.dark));
+    placeImages(pg);
   }
   // st.k = pixels per eenheid, st.ox/oy = verschuiving in pixels (alleen in canvas-modus ≠ 0)
   function sizeCanvas(st, c) {
@@ -173,13 +175,64 @@ export async function openEditor(root, notebookId, { onExit }) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, st.canvas.width, st.canvas.height);
     setT(ctx, st);
-    drawStrokes(ctx, pg.strokes, { fade, skip: drag && sel?.pg === pg ? sel.ids : null, cull: board ? visibleRect() : null });
+    drawStrokes(ctx, pg.strokes, { fade, skip: drag && sel?.pg === pg ? sel.ids : null, cull: board ? visibleRect() : null, dark: T.dark });
   }
   const renderQueue = new Set();
   let renderRaf = 0;
   function renderSoon(pg) {
     renderQueue.add(pg);
     if (!renderRaf) renderRaf = requestAnimationFrame(() => { renderRaf = 0; renderQueue.forEach(render); renderQueue.clear(); });
+  }
+
+  // ---------- Afbeeldingen en slides ----------
+  // pg.images = [{ id, asset, x, y, w, h, lock? }] in pagina-eenheden; de blob staat in de store 'assets'.
+  const assetUrls = new Map(); // asset-id → Promise<object-URL>
+  let isel = null; // geselecteerde afbeelding { pg, im, box, bar }
+  function assetUrl(id) {
+    if (!assetUrls.has(id)) assetUrls.set(id, db.get('assets', id).then(a => (a?.blob ? URL.createObjectURL(a.blob) : '')).catch(() => ''));
+    return assetUrls.get(id);
+  }
+  const prevImg = el => { let x = el.previousElementSibling; while (x && !x.classList.contains('pg-img')) x = x.previousElementSibling; return x; };
+  function placeImages(pg) {
+    const st = S.get(pg.id);
+    if (!st) return;
+    const k = cssK(), [ox, oy] = cssO();
+    const have = new Map([...st.el.querySelectorAll(':scope > .pg-img')].map(el => [el.dataset.img, el]));
+    let prev = null;
+    for (const im of pg.images || []) {
+      let el = have.get(im.id);
+      have.delete(im.id);
+      if (!el) {
+        el = document.createElement('img');
+        el.className = 'pg-img';
+        el.dataset.img = im.id;
+        el.alt = '';
+        el.draggable = false;
+        assetUrl(im.asset).then(u => { if (u) el.src = u; });
+      }
+      // volgorde op de pagina = volgorde in de lijst (later toegevoegd ligt bovenop)
+      if (!el.isConnected || prevImg(el) !== prev) st.el.insertBefore(el, prev ? prev.nextSibling : st.el.firstChild);
+      prev = el;
+      el.style.left = im.x * k + ox + 'px';
+      el.style.top = im.y * k + oy + 'px';
+      el.style.width = im.w * k + 'px';
+      el.style.height = im.h * k + 'px';
+    }
+    for (const el of have.values()) el.remove();
+    if (isel?.pg === pg) positionImageSel();
+  }
+  // Bovenste afbeelding onder een punt (slides die vastzitten tellen niet mee)
+  function imageAt(pg, x, y) {
+    return [...(pg.images || [])].reverse().find(im => !im.lock && x >= im.x && x <= im.x + im.w && y >= im.y && y <= im.y + im.h);
+  }
+  async function drawImagesOn(ctx, pg) {
+    for (const im of pg.images || []) {
+      const u = await assetUrl(im.asset);
+      if (!u) continue;
+      const img = new Image();
+      img.src = u;
+      try { await img.decode(); ctx.drawImage(img, im.x, im.y, im.w, im.h); } catch {}
+    }
   }
 
   const io = new IntersectionObserver(entries => {
@@ -321,8 +374,8 @@ export async function openEditor(root, notebookId, { onExit }) {
 
   // ---------- Ongedaan maken ----------
   const undo = [], redo = [];
-  function pushUndo(pg, before, after) {
-    undo.push({ id: pg.id, before, after });
+  function pushUndo(pg, before, after, kind = 'strokes') {
+    undo.push({ id: pg.id, before, after, kind });
     if (undo.length > 200) undo.shift();
     redo.length = 0;
     updateUndoBtns();
@@ -331,8 +384,8 @@ export async function openEditor(root, notebookId, { onExit }) {
     const pg = byId(op.id);
     if (!pg) return;
     clearSelection();
-    pg.strokes = op[which];
-    render(pg);
+    clearImageSel();
+    if (op.kind === 'images') { pg.images = op[which]; placeImages(pg); } else { pg.strokes = op[which]; render(pg); }
     save(pg);
   }
   function doUndo() { const op = undo.pop(); if (!op) return; applyOp(op, 'before'); redo.push(op); updateUndoBtns(); }
@@ -359,7 +412,7 @@ export async function openEditor(root, notebookId, { onExit }) {
       h += `<div class="seg small"><button class="pill ${T.eraser.mode === 'stroke' ? 'on' : ''}" data-em="stroke">Hele lijn</button><button class="pill ${T.eraser.mode === 'precise' ? 'on' : ''}" data-em="precise">Precies</button></div>`;
       h += `<div class="widths">${WIDTHS.eraser.map(w => `<button class="wd ${w === T.eraser.w ? 'on' : ''}" data-w="${w}" aria-label="Grootte"><i class="ring" style="width:${6 + w / 2.2}px;height:${6 + w / 2.2}px"></i></button>`).join('')}</div>`;
     } else {
-      h += `<span class="hint">Omcirkel inkt om te selecteren</span>`;
+      h += `<span class="hint">Omcirkel inkt om te selecteren · tik op een afbeelding om hem te verplaatsen</span>`;
     }
     optsEl.innerHTML = h;
     const ci = $('input[type=color]', optsEl);
@@ -380,7 +433,7 @@ export async function openEditor(root, notebookId, { onExit }) {
   function setTool(t) {
     if (T.tool === t && (t === 'pen' || t === 'hl')) return;
     T.tool = t;
-    if (t !== 'lasso') clearSelection();
+    if (t !== 'lasso') { clearSelection(); clearImageSel(); }
     saveTools();
     updateToolbar();
   }
@@ -450,14 +503,14 @@ export async function openEditor(root, notebookId, { onExit }) {
     if (drag && sel) {
       const st = S.get(sel.pg.id);
       setT(ctx, st, drag.dx, drag.dy);
-      drawStrokes(ctx, sel.pg.strokes.filter(s => sel.ids.has(s.id)));
+      drawStrokes(ctx, sel.pg.strokes.filter(s => sel.ids.has(s.id)), { dark: T.dark });
       return;
     }
     if (!active) return;
     const st = active.st;
     setT(ctx, st);
     if (active.tool === 'pen' || active.tool === 'hl') {
-      if (active.pts.length) drawStroke(ctx, { tool: active.tool, c: T[active.tool].c, w: active.w, p: active.shape ? active.pts : smoothPoints(active.pts, T.smooth) });
+      if (active.pts.length) drawStroke(ctx, { tool: active.tool, c: T[active.tool].c, w: active.w, p: active.shape ? active.pts : smoothPoints(active.pts, T.smooth) }, 1, T.dark);
     } else if (active.tool === 'lasso') {
       const p = active.pts;
       ctx.beginPath();
@@ -542,8 +595,13 @@ export async function openEditor(root, notebookId, { onExit }) {
     }
     if (active) return;
     const pageEl = e.target.closest('.page');
-    if (!pageEl) { clearSelection(); return; }
+    if (!pageEl) { clearSelection(); clearImageSel(); return; }
     const pg = byId(pageEl.dataset.id), st = S.get(pg.id);
+    if (T.tool === 'lasso') {
+      const im = imageAt(pg, ...toUnit(e, st));
+      if (im) { e.preventDefault(); selectImage(pg, im); return; }
+    }
+    clearImageSel();
     if (!st.canvas) attach(pg);
     e.preventDefault();
     try { pageEl.setPointerCapture(e.pointerId); } catch {}
@@ -594,9 +652,11 @@ export async function openEditor(root, notebookId, { onExit }) {
     if (tapTouch && e.pointerId === tapTouch.id) {
       const t = tapTouch;
       tapTouch = null;
-      if (e.type === 'pointerup' && player.open && performance.now() - t.t < 350) {
+      if (e.type === 'pointerup' && performance.now() - t.t < 350) {
         const pageEl = document.elementFromPoint(e.clientX, e.clientY)?.closest('.page');
-        if (pageEl) { const pg = byId(pageEl.dataset.id); seekAt(pg, ...toUnit(e, S.get(pg.id))); }
+        const pg = pageEl && byId(pageEl.dataset.id);
+        if (pg && player.open) seekAt(pg, ...toUnit(e, S.get(pg.id)));
+        else if (pg && T.tool === 'lasso') { const im = imageAt(pg, ...toUnit(e, S.get(pg.id))); if (im) selectImage(pg, im); else clearImageSel(); }
       }
       return;
     }
@@ -648,7 +708,7 @@ export async function openEditor(root, notebookId, { onExit }) {
     else if (a.st.canvas) {
       const ctx = a.st.canvas.getContext('2d');
       setT(ctx, a.st);
-      drawStroke(ctx, s);
+      drawStroke(ctx, s, 1, T.dark);
     }
     clearLive();
     save(pg);
@@ -851,6 +911,162 @@ export async function openEditor(root, notebookId, { onExit }) {
     sel = null;
     drag = null;
   }
+  function selectImage(pg, im) {
+    clearSelection();
+    clearImageSel();
+    const st = S.get(pg.id);
+    const box = document.createElement('div');
+    box.className = 'img-sel';
+    box.innerHTML = '<i class="img-handle" aria-label="Vergroten of verkleinen"></i>';
+    const bar = document.createElement('div');
+    bar.className = 'sel-bar';
+    bar.innerHTML = `
+      <button data-i="dup" aria-label="Dupliceer">${icon('copy', 18)}<span>Kopie</span></button>
+      <button data-i="del" class="danger" aria-label="Verwijder">${icon('trash', 18)}<span>Wis</span></button>
+      <button data-i="done" aria-label="Klaar">${icon('check', 18)}</button>`;
+    st.el.append(box, bar);
+    isel = { pg, im, box, bar };
+    positionImageSel();
+    box.addEventListener('pointerdown', startImageDrag);
+    bar.addEventListener('click', e => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if (b.dataset.i === 'del') imgDelete();
+      if (b.dataset.i === 'dup') imgDuplicate();
+      if (b.dataset.i === 'done') clearImageSel();
+    });
+  }
+  function positionImageSel() {
+    if (!isel) return;
+    const { im, box, bar } = isel, k = cssK(), [ox, oy] = cssO();
+    const L = im.x * k + ox, Tp = im.y * k + oy;
+    Object.assign(box.style, { left: L + 'px', top: Tp + 'px', width: im.w * k + 'px', height: im.h * k + 'px' });
+    bar.style.left = Math.max(4, L) + 'px';
+    bar.style.top = (Tp - 52 < 4 ? Tp + im.h * k + 8 : Tp - 52) + 'px';
+  }
+  function clearImageSel() {
+    if (!isel) return;
+    isel.box.remove();
+    isel.bar.remove();
+    isel = null;
+  }
+  function startImageDrag(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const { pg } = isel, st = S.get(pg.id);
+    try { isel.box.setPointerCapture(e.pointerId); } catch {}
+    const resize = !!e.target.closest('.img-handle');
+    const [x0, y0] = toUnit(e, st);
+    const before = pg.images;
+    // kopie van het object, zodat 'ongedaan maken' de oude positie nog heeft
+    const start = { ...isel.im };
+    pg.images = before.map(i => (i.id === start.id ? { ...i } : i));
+    const im = isel.im = pg.images.find(i => i.id === start.id);
+    let moved = false;
+    isel.bar.style.visibility = 'hidden';
+    const move = ev => {
+      if (ev.pointerId !== e.pointerId) return;
+      const [x, y] = toUnit(ev, st);
+      moved = true;
+      if (resize) {
+        im.w = Math.max(40, start.w + (x - x0));
+        im.h = im.w * start.h / start.w;
+      } else {
+        im.x = start.x + (x - x0);
+        im.y = start.y + (y - y0);
+        if (!board) { im.x = Math.min(PAGE_W - 40, Math.max(40 - im.w, im.x)); im.y = Math.min(PAGE_H - 40, Math.max(40 - im.h, im.y)); }
+      }
+      placeImages(pg);
+    };
+    const up = ev => {
+      if (ev.pointerId !== e.pointerId) return;
+      isel.box.removeEventListener('pointermove', move);
+      isel.box.removeEventListener('pointerup', up);
+      isel.box.removeEventListener('pointercancel', up);
+      isel.bar.style.visibility = '';
+      if (moved) { pushUndo(pg, before, pg.images, 'images'); save(pg); } else { pg.images = before; isel.im = before.find(i => i.id === start.id); }
+      placeImages(pg);
+    };
+    isel.box.addEventListener('pointermove', move);
+    isel.box.addEventListener('pointerup', up);
+    isel.box.addEventListener('pointercancel', up);
+  }
+  function imgDelete() {
+    const { pg, im } = isel, before = pg.images;
+    pg.images = before.filter(i => i.id !== im.id);
+    pushUndo(pg, before, pg.images, 'images');
+    clearImageSel();
+    placeImages(pg);
+    save(pg);
+  }
+  function imgDuplicate() {
+    const { pg, im } = isel, before = pg.images;
+    const copy = { ...im, id: uid('i'), x: im.x + 30, y: im.y + 30 };
+    pg.images = [...before, copy];
+    pushUndo(pg, before, pg.images, 'images');
+    placeImages(pg);
+    save(pg);
+    selectImage(pg, copy);
+  }
+
+  // Afbeelding invoegen: verkleinen tot max 2000 px, opslaan als asset en midden in beeld zetten
+  async function insertImage(blob) {
+    if (!blob) return;
+    let bmp;
+    try { bmp = await createImageBitmap(blob); } catch { toast('Deze afbeelding kan ik niet openen'); return; }
+    const f = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+    const w = Math.round(bmp.width * f), h = Math.round(bmp.height * f);
+    const png = blob.type === 'image/png' && w * h < 1.6e6; // screenshots met doorzichtigheid blijven PNG
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const cx = c.getContext('2d');
+    if (!png) { cx.fillStyle = '#fff'; cx.fillRect(0, 0, w, h); }
+    cx.drawImage(bmp, 0, 0, w, h);
+    bmp.close?.();
+    const out = await new Promise(r => c.toBlob(r, png ? 'image/png' : 'image/jpeg', 0.88));
+    c.width = c.height = 0;
+    const asset = { id: uid('a'), notebookId, blob: out, w, h, created: Date.now() };
+    await db.put('assets', asset);
+    let pg, uw, cxu, cyu;
+    if (board) {
+      pg = pages[0];
+      uw = Math.min(w, 520) / view.z;
+      cxu = view.x + scrollEl.clientWidth / 2 / view.z;
+      cyu = view.y + scrollEl.clientHeight / 2 / view.z;
+    } else {
+      pg = pages[currentPageIndex()];
+      const r = S.get(pg.id).el.getBoundingClientRect(), sr = scrollEl.getBoundingClientRect();
+      uw = Math.min(700, w / scale);
+      cxu = PAGE_W / 2;
+      cyu = Math.min(PAGE_H - 200, Math.max(200, (sr.top + sr.height / 2 - r.top) / r.height * PAGE_H));
+    }
+    let uh = uw * h / w;
+    if (!board && uh > PAGE_H - 120) { uh = PAGE_H - 120; uw = uh * w / h; }
+    const im = { id: uid('i'), asset: asset.id, x: cxu - uw / 2, y: Math.max(0, cyu - uh / 2), w: uw, h: uh };
+    const before = pg.images || [];
+    pg.images = [...before, im];
+    pushUndo(pg, before, pg.images, 'images');
+    placeImages(pg);
+    save(pg);
+    selectImage(pg, im);
+    toast('Afbeelding toegevoegd — sleep om te verplaatsen, de hoek om te vergroten');
+  }
+  async function pasteImage() {
+    try {
+      for (const item of await navigator.clipboard.read()) {
+        const type = item.types.find(t => t.startsWith('image/'));
+        if (type) return insertImage(await item.getType(type));
+      }
+      toast('Er staat geen afbeelding op het klembord');
+    } catch { toast('Plakken lukt hier niet — kies "Afbeelding invoegen"'); }
+  }
+  const onPaste = e => {
+    if (e.target.matches?.('input, textarea')) return;
+    const file = [...(e.clipboardData?.files || [])].find(f => f.type.startsWith('image/'));
+    if (file) { e.preventDefault(); insertImage(file); }
+  };
+  document.addEventListener('paste', onPaste);
+
   function startDrag(e) {
     e.preventDefault();
     e.stopPropagation();
@@ -947,7 +1163,8 @@ export async function openEditor(root, notebookId, { onExit }) {
       }
       return;
     }
-    if (pg.strokes.length && !await confirmDialog('Deze pagina verwijderen?')) return;
+    if ((pg.strokes.length || pg.images?.length) && !await confirmDialog('Deze pagina verwijderen?')) return;
+    if (isel?.pg === pg) clearImageSel();
     const st = S.get(pg.id);
     io.unobserve(st.el);
     st.el.remove();
@@ -968,6 +1185,9 @@ export async function openEditor(root, notebookId, { onExit }) {
         <div class="menu-label">Achtergrond</div>
         <div class="paper-pick four">${BOARD_PAPERS.map(p => `<button class="paper-opt ${p.id === pg.paper ? 'on' : ''}" data-paper="${p.id}"><i class="pp pp-${p.id}"></i><span>${p.label}</span></button>`).join('')}</div>
         <hr>
+        <button class="menu-item" data-p="img">${icon('image', 18)}<span>Afbeelding of foto invoegen</span></button>
+        <button class="menu-item" data-p="paste">${icon('copy', 18)}<span>Afbeelding plakken</span></button>
+        <hr>
         <button class="menu-item" data-p="fit">${icon('zoom', 18)}<span>Alles in beeld</span></button>
         <button class="menu-item" data-p="export">${icon('export', 18)}<span>Delen als afbeelding</span></button>
       </div>`, { align: 'right' });
@@ -983,6 +1203,8 @@ export async function openEditor(root, notebookId, { onExit }) {
       }
       closePopovers();
       if (b.dataset.p === 'fit') fitAll();
+      if (b.dataset.p === 'img') pickFile('image/*').then(insertImage);
+      if (b.dataset.p === 'paste') pasteImage();
       if (b.dataset.p === 'export') exportBoard();
     });
   }
@@ -1002,6 +1224,9 @@ export async function openEditor(root, notebookId, { onExit }) {
       <div class="menu">
         <button class="menu-item" data-p="end">${icon('pageplus', 18)}<span>Nieuwe pagina achteraan</span></button>
         <button class="menu-item" data-p="after">${icon('pageplus', 18)}<span>Pagina invoegen na ${i + 1}</span></button>
+        <hr>
+        <button class="menu-item" data-p="img">${icon('image', 18)}<span>Afbeelding of foto invoegen</span></button>
+        <button class="menu-item" data-p="paste">${icon('copy', 18)}<span>Afbeelding plakken</span></button>
         <hr>
         <div class="menu-label">Papier van pagina ${i + 1}</div>
         <div class="paper-pick">${PAPERS.map(p => `<button class="paper-opt ${p.id === pg.paper ? 'on' : ''}" data-paper="${p.id}"><i class="pp pp-${p.id}"></i><span>${p.label}</span></button>`).join('')}</div>
@@ -1023,6 +1248,8 @@ export async function openEditor(root, notebookId, { onExit }) {
       closePopovers();
       if (b.dataset.p === 'end') addPage(pages.length);
       if (b.dataset.p === 'after') addPage(i + 1);
+      if (b.dataset.p === 'img') pickFile('image/*').then(insertImage);
+      if (b.dataset.p === 'paste') pasteImage();
       if (b.dataset.p === 'del') deletePage(pg);
       if (b.dataset.p === 'export') exportPage(pg, i);
     });
@@ -1035,6 +1262,7 @@ export async function openEditor(root, notebookId, { onExit }) {
     const ctx = c.getContext('2d');
     ctx.setTransform(k, 0, 0, k, 0, 0);
     drawPaper(ctx, pg.paper);
+    await drawImagesOn(ctx, pg);
     drawStrokes(ctx, pg.strokes);
     const blob = await new Promise(r => c.toBlob(r, 'image/png'));
     saveFile(blob, `${(nb.title || 'notitie').replace(/[\\/:*?"<>|]/g, '-')} - p${i + 1}.png`);
@@ -1047,6 +1275,7 @@ export async function openEditor(root, notebookId, { onExit }) {
       <p class="menu-note">Strijkt trillende of hobbelige lijnen glad terwijl je schrijft</p>
       <div class="seg small smooth-pick">${SMOOTH_LEVELS.map(l => `<button class="pill ${T.smooth === l.v ? 'on' : ''}" data-sm="${l.v}">${l.label}</button>`).join('')}</div>
       <hr>
+      ${row('dark', 'Donkere modus', "Donker papier en lichte inkt, prettig voor 's avonds. Exporteren blijft licht")}
       ${row('fingerDraw', 'Tekenen met vinger', 'Uit = alleen de Pencil tekent, je vinger scrolt (palm rejection)')}
       ${row('scribble', 'Krassen om te gummen', 'Zigzag snel over inkt om het weg te halen')}
       ${row('hold', 'Vasthouden voor vormen', 'Pen stilhouden na een lijn of cirkel maakt hem strak. Cirkel om inkt + vasthouden = selecteren')}
@@ -1066,6 +1295,7 @@ export async function openEditor(root, notebookId, { onExit }) {
       T[k] = e.target.checked;
       saveTools();
       updateToolbar();
+      if (k === 'dark') { ed.classList.toggle('dark', T.dark); layout(); }
     });
   }
 
@@ -1225,8 +1455,9 @@ export async function openEditor(root, notebookId, { onExit }) {
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
     const map = { p: 'pen', h: 'hl', e: 'eraser', l: 'lasso' };
     if (!mod && map[e.key]) setTool(map[e.key]);
-    if (e.key === 'Escape') clearSelection();
+    if (e.key === 'Escape') { clearSelection(); clearImageSel(); }
     if ((e.key === 'Backspace' || e.key === 'Delete') && sel) selDelete();
+    else if ((e.key === 'Backspace' || e.key === 'Delete') && isel) imgDelete();
   }
   document.addEventListener('keydown', onKey);
 
@@ -1236,6 +1467,7 @@ export async function openEditor(root, notebookId, { onExit }) {
     if (closed) return;
     closed = true;
     document.removeEventListener('keydown', onKey);
+    document.removeEventListener('paste', onPaste);
     document.removeEventListener('visibilitychange', onHide);
     io.disconnect();
     ro.disconnect();
@@ -1243,8 +1475,22 @@ export async function openEditor(root, notebookId, { onExit }) {
     player.audio.pause();
     if (player.url) URL.revokeObjectURL(player.url);
     clearSelection();
+    clearImageSel();
     await saveSoon.flush();
-    try { nb.thumb = board ? renderFit(pages[0].strokes, 240, 339, 0.08).toDataURL('image/jpeg', 0.75) : thumbnail(pages[0]); } catch {}
+    try {
+      if (board) nb.thumb = renderFit(pages[0].strokes, 240, 339, 0.08).toDataURL('image/jpeg', 0.75);
+      else if (pages[0].images?.length) {
+        const c = document.createElement('canvas'), k = 240 / PAGE_W;
+        c.width = 240; c.height = Math.round(PAGE_H * k);
+        const ctx = c.getContext('2d');
+        ctx.setTransform(k, 0, 0, k, 0, 0);
+        drawPaper(ctx, pages[0].paper);
+        await drawImagesOn(ctx, pages[0]);
+        drawStrokes(ctx, pages[0].strokes);
+        nb.thumb = c.toDataURL('image/jpeg', 0.75);
+      } else nb.thumb = thumbnail(pages[0]);
+    } catch {}
+    for (const u of assetUrls.values()) u.then(x => x && URL.revokeObjectURL(x));
     if (board) nb.view = { ...view };
     nb.pageCount = pages.length;
     await db.put('notebooks', nb);

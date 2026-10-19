@@ -488,7 +488,20 @@ button:disabled { opacity: .4; cursor: default; }
 .ed-scroll { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; position: relative; }
 .ed-pages { display: flex; flex-direction: column; align-items: center; gap: 22px; padding: 22px 16px calc(140px + var(--safe-b)); width: max-content; min-width: 100%; transform-origin: 0 0; }
 .page { position: relative; background-color: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .12), 0 8px 26px rgba(0, 0, 0, .07); border-radius: 3px; flex: none; touch-action: pan-x pan-y; }
-.page canvas.ink { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.page canvas.ink { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+.pg-img { position: absolute; z-index: 0; pointer-events: none; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; max-width: none; }
+.img-sel { position: absolute; z-index: 2; border: 2px solid var(--accent); border-radius: 4px; touch-action: none; cursor: move; background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.img-handle { position: absolute; right: -14px; bottom: -14px; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); border: 3px solid #fff; box-shadow: 0 2px 6px rgba(0, 0, 0, .3); cursor: nwse-resize; }
+.editor.dark { --page-bg: #111215; }
+.editor.dark .ed-scroll { background: #111215; }
+.editor.dark .page { background-color: #1f2024; box-shadow: 0 1px 3px rgba(0, 0, 0, .5); }
+.editor.dark .ed-scroll.board, .editor.dark .page.board { background-color: #1f2024; }
+.editor.dark .pg-img { filter: brightness(.92); }
+.import-progress { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgba(0, 0, 0, .35); }
+.ip-card { background: var(--surface); color: var(--text); border-radius: 18px; padding: 22px 24px; width: min(360px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px; box-shadow: 0 20px 60px rgba(0, 0, 0, .3); }
+.ip-txt { color: var(--muted); font-size: 14px; }
+.ip-bar { height: 6px; border-radius: 6px; background: var(--surface-2); overflow: hidden; }
+.ip-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
 /* Oneindig canvas */
 .ed-scroll.board { overflow: hidden; touch-action: none; background: #fff; }
 .ed-scroll.board .ed-pages { padding: 0; width: 100%; height: 100%; min-width: 0; display: block; position: relative; }

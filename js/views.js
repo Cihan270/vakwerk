@@ -10,6 +10,7 @@ import { GRADES, schedule, isDue, isNew, intervalLabel, newSrs, shuffle, deckKey
 import { importFile, exportBackup, seedDemo, removeDemo, wipeAll, isDemoSubject } from './pack.js';
 import { PAPERS } from './ink.js';
 import { shiftBlock, undoShift } from './planner.js';
+import { importPdf } from './pdf.js';
 import { connectInbox, checkInbox, disconnectInbox } from './inbox.js';
 
 const KINDS = ['Hoorcollege', 'Werkcollege', 'Practicum', 'Tutorial', 'Zelfstudie', 'Tentamen', 'Overig'];
@@ -513,6 +514,13 @@ export async function subjectView(root, id, tab = 'notities') {
       case 'back': return go('#/');
       case 'search': return openSearch();
       case 'newnote': return newNotebook(id);
+      case 'importpdf': {
+        const f = await pickFile('application/pdf,.pdf');
+        if (!f) return;
+        const nb = await importPdf(id, f);
+        if (nb) go('#/notitie/' + nb.id);
+        return;
+      }
       case 'newhand': return newNotebook(id, { kind: 'summary' });
       case 'newtyped': { const r = await editSummary({ subjectId: id }); if (r) go('#/samenvatting/' + r.id); return; }
       case 'newtask': if (await editTask({ subjectId: id })) rerender(); return;
@@ -545,7 +553,7 @@ export async function subjectView(root, id, tab = 'notities') {
 
 function notebookCard(n) {
   return `<div class="nb-card" data-nb="${n.id}">
-    <div class="nb-thumb">${n.thumb ? `<img src="${n.thumb}" alt="">` : '<div class="paper-blank"></div>'}${n.hasAudio ? `<span class="nb-audio">${icon('mic', 14)}</span>` : ''}${n.layout === 'board' ? `<span class="nb-kind">${icon('board', 13)} Canvas</span>` : ''}</div>
+    <div class="nb-thumb">${n.thumb ? `<img src="${n.thumb}" alt="">` : '<div class="paper-blank"></div>'}${n.hasAudio ? `<span class="nb-audio">${icon('mic', 14)}</span>` : ''}${n.layout === 'board' ? `<span class="nb-kind">${icon('board', 13)} Canvas</span>` : n.source === 'pdf' ? `<span class="nb-kind">${icon('slides', 13)} Slides</span>` : ''}</div>
     <div class="nb-meta"><b>${esc(n.title)}</b><small>${fmtDate(n.updated || n.created)}${n.layout !== 'board' && n.pageCount > 1 ? ` · ${n.pageCount} pagina's` : ''}</small></div>
     <button class="icon-btn small nb-more" data-nbmenu="${n.id}" aria-label="Opties">${icon('more', 18)}</button>
   </div>`;
@@ -555,6 +563,7 @@ function notesTab(list) {
   list.sort((a, b) => (b.updated || 0) - (a.updated || 0));
   return `<div class="nb-grid">
     <button class="nb-card new" data-a="newnote"><div class="nb-thumb">${icon('plus', 34)}</div><div class="nb-meta"><b>Nieuwe notitie</b><small>Schrijf met je Pencil</small></div></button>
+    <button class="nb-card new" data-a="importpdf"><div class="nb-thumb">${icon('slides', 34)}</div><div class="nb-meta"><b>Slides importeren</b><small>PDF uit Bestanden of Canvas</small></div></button>
     ${list.map(notebookCard).join('')}
   </div>${list.length ? '' : '<p class="empty">Nog geen aantekeningen. Tik op "Nieuwe notitie" om te beginnen. Tip: druk op de microfoon om het college op te nemen terwijl je schrijft.</p>'}`;
 }

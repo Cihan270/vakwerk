@@ -25,10 +25,38 @@ export function bbox(p) {
 
 const pf = pr => Math.min(1.5, Math.max(0.35, 0.3 + 1.25 * pr));
 
+// ---------- Donker thema ----------
+// Donkere inkt wordt licht weergegeven (zwart → bijna wit, donkerblauw → lichtblauw); de opgeslagen kleur blijft gelijk.
+const inkCache = new Map();
+export function inkColor(c, dark) {
+  if (!dark || typeof c !== 'string' || !/^#[0-9a-f]{6}$/i.test(c)) return c;
+  if (inkCache.has(c)) return inkCache.get(c);
+  let r = parseInt(c.slice(1, 3), 16) / 255, g = parseInt(c.slice(3, 5), 16) / 255, b = parseInt(c.slice(5, 7), 16) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  let h = 0, sat = 0, l = (mx + mn) / 2;
+  if (mx !== mn) {
+    const d = mx - mn;
+    sat = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    h /= 6;
+  }
+  let out = c;
+  if (l < 0.5) {
+    l = 1 - l;
+    const q = l < 0.5 ? l * (1 + sat) : l + sat - l * sat, pp = 2 * l - q;
+    const f = t => { t = (t + 1) % 1; return t < 1 / 6 ? pp + (q - pp) * 6 * t : t < 1 / 2 ? q : t < 2 / 3 ? pp + (q - pp) * (2 / 3 - t) * 6 : pp; };
+    out = '#' + [f(h + 1 / 3), f(h), f(h - 1 / 3)].map(v => Math.round(v * 255).toString(16).padStart(2, '0')).join('');
+  }
+  inkCache.set(c, out);
+  return out;
+}
+const DARK_PAPER = { '#cfd9e8': '#363c48', '#b7c0cd': '#4d5463', '#f2c4c4': '#6e3d42', '#dde4ee': '#30353f', '#e7a9a9': '#7c464b', '#d5dde9': '#363c48', '#e1e7ef': '#30353f' };
+const darkPaper = o => (o.backgroundImage ? { ...o, backgroundImage: o.backgroundImage.replace(/#[0-9a-f]{6}/g, c => DARK_PAPER[c] || c) } : o);
+
 // ---------- Tekenen ----------
-function drawPen(ctx, s) {
+function drawPen(ctx, s, dark) {
   const p = s.p, n = p.length / 3;
-  ctx.strokeStyle = ctx.fillStyle = s.c;
+  ctx.strokeStyle = ctx.fillStyle = inkColor(s.c, dark);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   if (n === 1) {
@@ -64,11 +92,11 @@ function drawPen(ctx, s) {
   ctx.stroke();
 }
 
-function drawHighlighter(ctx, s) {
+function drawHighlighter(ctx, s, dark) {
   const p = s.p, n = p.length / 3;
   ctx.save();
-  ctx.globalAlpha *= 0.38;
-  ctx.globalCompositeOperation = 'multiply';
+  ctx.globalAlpha *= dark ? 0.45 : 0.38;
+  ctx.globalCompositeOperation = dark ? 'source-over' : 'multiply'; // 'multiply' maakt op donker papier alles zwart
   ctx.strokeStyle = s.c;
   ctx.lineWidth = s.w;
   ctx.lineCap = 'round';
@@ -85,23 +113,26 @@ function drawHighlighter(ctx, s) {
   ctx.restore();
 }
 
-export function drawStroke(ctx, s, alpha = 1) {
+export function drawStroke(ctx, s, alpha = 1, dark = false) {
   ctx.globalAlpha = alpha;
-  if (s.tool === 'hl') drawHighlighter(ctx, s); else drawPen(ctx, s);
+  if (s.tool === 'hl') drawHighlighter(ctx, s, dark); else drawPen(ctx, s, dark);
   ctx.globalAlpha = 1;
 }
 
 // fade: { rec, t } → lijnen uit opname `rec` die na tijd `t` (ms) geschreven zijn worden vaag getekend
 // cull: [x0,y0,x1,y1] → lijnen buiten dit gebied worden overgeslagen (canvas-modus)
-export function drawStrokes(ctx, strokes, { fade, skip, cull } = {}) {
+export function drawStrokes(ctx, strokes, { fade, skip, cull, dark = false } = {}) {
   const a = s => (fade && s.r === fade.rec && s.t > fade.t) ? 0.16 : 1;
   const vis = s => !skip?.has(s.id) && (!cull || !(s.b[2] + s.w < cull[0] || s.b[0] - s.w > cull[2] || s.b[3] + s.w < cull[1] || s.b[1] - s.w > cull[3]));
-  for (const s of strokes) if (s.tool === 'hl' && vis(s)) drawStroke(ctx, s, a(s));
-  for (const s of strokes) if (s.tool !== 'hl' && vis(s)) drawStroke(ctx, s, a(s));
+  for (const s of strokes) if (s.tool === 'hl' && vis(s)) drawStroke(ctx, s, a(s), dark);
+  for (const s of strokes) if (s.tool !== 'hl' && vis(s)) drawStroke(ctx, s, a(s), dark);
 }
 
 // ---------- Papier ----------
-export function paperCss(paper, scale) {
+export function paperCss(paper, scale, dark = false) {
+  return dark ? darkPaper(paperCssLight(paper, scale)) : paperCssLight(paper, scale);
+}
+function paperCssLight(paper, scale) {
   const L = LINE * scale, G = GRID * scale, line = '#cfd9e8', dot = '#b7c0cd';
   const hLines = `repeating-linear-gradient(to bottom, transparent 0, transparent ${L - 1}px, ${line} ${L - 1}px, ${line} ${L}px)`;
   switch (paper) {
@@ -135,7 +166,10 @@ export const BOARD_PAPERS = PAPERS.filter(p => p.id !== 'cornell');
 
 // Achtergrond die meeschuift en meeschaalt met de weergave { x, y, z }.
 // Bij ver uitzoomen worden de lijnen 4× zo ruim, zodat het niet één grijze vlek wordt.
-export function boardBg(paper, view) {
+export function boardBg(paper, view, dark = false) {
+  return dark ? darkPaper(boardBgLight(paper, view)) : boardBgLight(paper, view);
+}
+function boardBgLight(paper, view) {
   if (!paper || paper === 'blank') return { backgroundImage: 'none', backgroundPosition: '', backgroundSize: '', backgroundRepeat: '' };
   let S = (paper === 'lined' ? LINE : GRID) * view.z;
   while (S < 12) S *= 4;

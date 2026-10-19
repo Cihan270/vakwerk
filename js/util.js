@@ -1,5 +1,5 @@
 // Kleine hulpfuncties: DOM, datums, iconen, dialogen en meldingen.
-export const APP_VERSION = 'v12'; // gelijk houden met VERSION in sw.js
+export const APP_VERSION = 'v13'; // gelijk houden met VERSION in sw.js
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -116,6 +116,8 @@ const ICONS = {
   grid: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>',
   board: '<rect x="2" y="4" width="20" height="16" rx="3"/><path d="M6 14c2-3 3.5-3 5 0s3 3 5 0"/><path d="M17 8h1"/>',
   flag: '<path d="M4 22V4"/><path d="M4 4h13l-2 4 2 4H4"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>',
+  slides: '<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M12 17v4M8 21h8"/>',
   list: '<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/>',
 };
 export function icon(name, size = 22) {

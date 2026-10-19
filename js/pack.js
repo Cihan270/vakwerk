@@ -168,7 +168,7 @@ export async function exportBackup() {
   const out = { type: 'vakwerk-backup', version: 1, created: new Date().toISOString(), stores: {} };
   for (const s of STORE_NAMES) {
     let items = await db.all(s);
-    if (s === 'recordings') items = await Promise.all(items.map(async r => ({ ...r, blob: await blobToDataUrl(r.blob) })));
+    if (s === 'recordings' || s === 'assets') items = await Promise.all(items.map(async r => ({ ...r, blob: await blobToDataUrl(r.blob) })));
     out.stores[s] = items;
   }
   const blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
@@ -181,7 +181,7 @@ export async function restoreBackup(data) {
   for (const s of STORE_NAMES) {
     await db.clear(s);
     let items = data.stores?.[s] || [];
-    if (s === 'recordings') items = await Promise.all(items.map(async r => ({ ...r, blob: await dataUrlToBlob(r.blob) })));
+    if (s === 'recordings' || s === 'assets') items = await Promise.all(items.map(async r => ({ ...r, blob: await dataUrlToBlob(r.blob) })));
     if (items.length) await db.putMany(s, items);
   }
   toast('Back-up teruggezet');

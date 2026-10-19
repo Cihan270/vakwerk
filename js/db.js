@@ -2,13 +2,14 @@
 // het artifact, zodat alles tussen je apparaten synchroniseert en Claude er direct in kan schrijven.
 
 const DB_NAME = 'vakwerk';
-const VERSION = 2; // v2: studieplanning
+const VERSION = 3; // v2: studieplanning, v3: afbeeldingen en slides
 const STORES = {
   subjects: [],
   slots: ['subjectId'],
   notebooks: ['subjectId'],
   pages: ['notebookId'],
   recordings: ['notebookId'],
+  assets: ['notebookId'], // afbeeldingen en slides (blob) bij een notitie
   summaries: ['subjectId'],
   assignments: ['subjectId'],
   cards: ['subjectId'],
@@ -62,6 +63,7 @@ const idb = {
 // Elk object is een document `<store>/<id>`. Inkt van een pagina gaat in stukken (`inkchunks/<pagina>~<n>`),
 // omdat één document hooguit 256 KiB mag zijn. Opnames (audio) kan een artifact niet maken, die store blijft leeg.
 const CHUNK_BYTES = 180_000;
+const BLOB_STORES = new Set(['recordings', 'assets']);
 const clean = o => JSON.parse(JSON.stringify(o));
 async function pool(items, fn, n = 6) {
   const out = [];
@@ -129,7 +131,7 @@ function artifactBackend(store) {
   }
   const api = {
     async get(s, id) {
-      if (s === 'recordings') return undefined;
+      if (BLOB_STORES.has(s)) return undefined;
       if (s === 'meta' && meta.has(id)) return meta.get(id);
       const snap = await retry(() => store.collection(s).doc(id).get());
       let v = snap.exists ? { ...snap.data() } : undefined;
@@ -138,17 +140,17 @@ function artifactBackend(store) {
       return v;
     },
     async all(s) {
-      if (s === 'recordings') return [];
+      if (BLOB_STORES.has(s)) return [];
       const rows = await list(s);
       return s === 'pages' ? Promise.all(rows.map(hydrate)) : rows;
     },
     async by(s, index, value) {
-      if (s === 'recordings') return [];
+      if (BLOB_STORES.has(s)) return [];
       const rows = await list(s, [index, value]);
       return s === 'pages' ? Promise.all(rows.map(hydrate)) : rows;
     },
     async put(s, obj) {
-      if (s === 'recordings') return obj;
+      if (BLOB_STORES.has(s)) return obj;
       if (s === 'pages') { await putPage(obj); return obj; }
       await retry(() => store.collection(s).doc(obj.id).set(clean(obj)));
       if (s === 'meta') meta.set(obj.id, clean(obj));
@@ -156,14 +158,14 @@ function artifactBackend(store) {
     },
     async putMany(s, arr) { await pool(arr, o => api.put(s, o), 2); },
     async del(s, id) {
-      if (s === 'recordings') return;
+      if (BLOB_STORES.has(s)) return;
       if (s === 'pages') return delPage(id);
       await retry(() => store.collection(s).doc(id).delete());
       if (s === 'meta') meta.delete(id);
     },
     async delMany(s, ids) { await pool(ids, id => api.del(s, id), 2); },
     async clear(s) {
-      if (s === 'recordings') return;
+      if (BLOB_STORES.has(s)) return;
       const rows = await list(s);
       await pool(rows.map(r => r.id), id => api.del(s, id), 2);
     },
@@ -201,9 +203,10 @@ export function setSetting(key, value) { return db.put('meta', { id: key, value 
 
 // Verwijdert een notitieboek inclusief pagina's en opnames
 export async function deleteNotebook(id) {
-  const [pages, recs] = await Promise.all([db.by('pages', 'notebookId', id), db.by('recordings', 'notebookId', id)]);
+  const [pages, recs, assets] = await Promise.all([db.by('pages', 'notebookId', id), db.by('recordings', 'notebookId', id), db.by('assets', 'notebookId', id)]);
   await db.delMany('pages', pages.map(p => p.id));
   await db.delMany('recordings', recs.map(r => r.id));
+  await db.delMany('assets', assets.map(a => a.id));
   await db.del('notebooks', id);
 }
 
