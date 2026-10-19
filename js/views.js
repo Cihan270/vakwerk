@@ -6,7 +6,7 @@ import {
   parseDay, MONTHS, MONTHS_SHORT, APP_VERSION,
 } from './util.js';
 import { markdown, plainText } from './markdown.js';
-import { GRADES, schedule, isDue, isNew, intervalLabel, newSrs, shuffle, deckKey, deckSets } from './srs.js';
+import { GRADES, schedule, isDue, isNew, intervalLabel, newSrs, shuffle, deckKey, deckSets, isWeak, isKnown } from './srs.js';
 import { importFile, exportBackup, seedDemo, removeDemo, wipeAll, isDemoSubject } from './pack.js';
 import { PAPERS } from './ink.js';
 import { shiftBlock, undoShift } from './planner.js';
@@ -472,7 +472,7 @@ export async function subjectView(root, id, tab = 'notities') {
   if (tab === 'notities') body = notesTab(notebooks.filter(n => n.kind !== 'summary'), 'note');
   if (tab === 'samenvattingen') body = summariesTab(summaries, notebooks.filter(n => n.kind === 'summary'));
   if (tab === 'opdrachten') body = tasksTab(tasks, s);
-  if (tab === 'oefenen') body = practiceTab(cards, s, summaries);
+  if (tab === 'oefenen') body = practiceTab(cards, s, summaries, await getSetting('practiceDir', 'normal'));
   if (tab === 'planning') {
     const done = plan.filter(p => p.kind === 'study' && p.done).length, total = plan.filter(p => p.kind === 'study').length;
     body = `<div class="row gap wrap"><span class="muted">${done} van ${total} studieblokken af</span><button class="btn small" data-a="newblock">${icon('plus', 16)} Blok</button></div>
@@ -520,6 +520,9 @@ export async function subjectView(root, id, tab = 'notities') {
       case 'review': return go('#/oefenen/' + id);
       case 'cram': return go('#/oefenen/' + id + '?alles');
       case 'set': return go(`#/oefenen/${id}?set=${encodeURIComponent(a.dataset.set)}`);
+      case 'setweak': return go(`#/oefenen/${id}?fout&set=${encodeURIComponent(a.dataset.set)}`);
+      case 'weak': return go(`#/oefenen/${id}?fout`);
+      case 'dir': await setSetting('practiceDir', a.dataset.dir); return rerender();
       case 'more': {
         const v = await menu(a, [
           { label: 'Vak bewerken', value: 'edit', icon: 'edit' },
@@ -580,30 +583,48 @@ function tasksTab(tasks, s) {
     ${done.length ? `<details class="done-list"><summary>Afgerond (${done.length})</summary><div class="tasks big">${done.map(t => taskRow(t, s)).join('')}</div></details>` : ''}`;
 }
 
-function practiceTab(cards, s, summaries = []) {
+const PRACTICE_DIRS = [
+  { v: 'normal', label: 'Begrip → uitleg' },
+  { v: 'reverse', label: 'Uitleg → begrip' },
+  { v: 'mixed', label: 'Gemengd' },
+];
+
+function practiceTab(cards, s, summaries = [], dir = 'normal') {
   const due = cards.filter(c => isDue(c)).length;
   const fresh = cards.filter(isNew).length;
+  const weak = cards.filter(isWeak).length;
   const sets = deckSets(cards, summaries);
   return `<div class="stats">
       <div class="stat"><b>${due}</b><small>te herhalen</small></div>
       <div class="stat"><b>${fresh}</b><small>nieuw</small></div>
       <div class="stat"><b>${cards.length}</b><small>totaal</small></div>
     </div>
+    <div class="row gap wrap practice-dir"><span class="muted small">Vraag:</span>
+      <div class="seg small">${PRACTICE_DIRS.map(d => `<button class="pill ${d.v === dir ? 'on' : ''}" data-a="dir" data-dir="${d.v}">${d.label}</button>`).join('')}</div>
+    </div>
     <div class="row gap wrap">
       <button class="btn primary" data-a="review" ${due ? '' : 'disabled'}>${icon('cards', 18)} Start herhalen</button>
       <button class="btn" data-a="cram" ${cards.length ? '' : 'disabled'}>Alles door elkaar</button>
+      <button class="btn ${weak ? 'weak-btn' : ''}" data-a="weak" ${weak ? '' : 'disabled'}>Foute kaarten${weak ? ` (${weak})` : ''}</button>
       <button class="btn ghost" data-a="newcard">${icon('plus', 18)} Kaart maken</button>
     </div>
-    ${sets.length > 1 ? `<h3 class="sec-title">Per set leren</h3>
+    ${cards.length ? `<h3 class="sec-title">Per set leren</h3>
     <div class="deck-list">${sets.map(d => {
-      const dd = d.cards.filter(c => isDue(c)).length;
-      return `<button class="deck-row" data-a="set" data-set="${esc(d.key)}"><span><b>${esc(d.label)}</b><small>${d.cards.length} kaart${d.cards.length === 1 ? '' : 'en'}${dd ? ` · ${dd} te herhalen` : ''}</small></span>${icon('cards', 18)}</button>`;
+      const known = d.cards.filter(isKnown).length, w = d.cards.filter(isWeak).length, pct = Math.round(known / d.cards.length * 100);
+      return `<div class="deck-row">
+        <button class="deck-main" data-a="set" data-set="${esc(d.key)}">
+          <b>${esc(d.label)}</b>
+          <span class="deck-bar" title="${pct}% beheerst"><i style="width:${pct}%"></i></span>
+          <small>${known} van ${d.cards.length} goed${w ? ` · <span class="weak-txt">${w} fout</span>` : ''}</small>
+        </button>
+        ${w ? `<button class="pill deck-weak" data-a="setweak" data-set="${esc(d.key)}" aria-label="Foute kaarten van deze set oefenen">${w} fout ›</button>` : ''}
+      </div>`;
     }).join('')}</div>` : ''}
     ${cards.length ? `<input class="input card-filter" type="search" placeholder="Zoek in kaarten…">
     <div class="card-list">${cards.sort((a, b) => a.front.localeCompare(b.front)).map(c => `<button class="card-row" data-card="${c.id}">
       <span class="tag ${c.kind === 'vraag' ? 'q' : c.kind === 'begrip' ? 'ai' : ''}">${c.kind === 'vraag' ? 'Vraag' : c.kind === 'begrip' ? 'Begrip' : 'Eigen'}</span>
       <b>${esc(c.front)}</b><small>${esc(c.back)}</small>
-      <em>${isDue(c) ? 'nu' : fmtDate(c.srs.due)}</em>
+      <em>${isWeak(c) ? '<span class="weak-txt">fout</span>' : isDue(c) ? 'nu' : fmtDate(c.srs.due)}</em>
     </button>`).join('')}</div>` : '<p class="empty">Nog geen kaarten. Begrippen en oefenvragen uit geïmporteerde samenvattingen worden automatisch flashcards. Je kunt ook zelf kaarten maken.</p>'}`;
 }
 
@@ -778,7 +799,9 @@ export async function summaryView(root, id, tab = 'tekst') {
 export async function practiceView(root, scope, query = '') {
   const q = new URLSearchParams(query || '');
   const setKey = q.get('set');
-  const cram = q.has('alles') || !!setKey; // een set leer je helemaal, niet alleen wat 'te herhalen' is
+  const weakOnly = q.has('fout'); // alleen kaarten waarop je de laatste keer Opnieuw of Moeilijk tikte
+  const cram = q.has('alles') || !!setKey || weakOnly; // een set leer je helemaal, niet alleen wat 'te herhalen' is
+  const dir = await getSetting('practiceDir', 'normal');
   let cards;
   let title = 'Herhalen';
   let back = '#/';
@@ -800,7 +823,16 @@ export async function practiceView(root, scope, query = '') {
       if (set) title = set.label;
     }
   }
+  if (weakOnly) { cards = cards.filter(isWeak); title = 'Foute kaarten · ' + title; }
   const subs = Object.fromEntries((await db.all('subjects')).map(s => [s.id, s]));
+  // Omgekeerd: je ziet de uitleg en noemt het begrip. Oefenvragen blijven altijd vraag → antwoord.
+  const revOf = new Map();
+  const reversed = c => {
+    if (c.kind === 'vraag' || dir === 'normal') return false;
+    if (dir === 'reverse') return true;
+    if (!revOf.has(c.id)) revOf.set(c.id, Math.random() < 0.5);
+    return revOf.get(c.id);
+  };
   // Hetzelfde begrip uit twee sets maar één keer vragen als je alles door elkaar oefent
   if (cram && !setKey) {
     const seen = new Set();
@@ -818,26 +850,30 @@ export async function practiceView(root, scope, query = '') {
     if (!c) {
       root.innerHTML = `<div class="view practice"><header class="topbar sub"><div class="row"><button class="icon-btn" data-a="back">${icon('back')}</button><h1>${esc(title)}</h1></div></header>
         <div class="practice-done"><div class="welcome-art">${icon('check', 44)}</div><h2>${total ? 'Klaar!' : 'Niets te herhalen'}</h2>
-        <p class="muted">${total ? `Je hebt ${done} kaart${done === 1 ? '' : 'en'} geoefend. Moeilijke kaarten komen binnenkort terug, makkelijke pas later.` : 'Alle kaarten zijn up-to-date. Kom later terug of kies "Alles oefenen".'}</p>
+        <p class="muted">${total ? `Je hebt ${done} kaart${done === 1 ? '' : 'en'} geoefend. ${weakOnly ? 'Kaarten die je nu Goed had, staan niet meer bij je foute kaarten.' : 'Moeilijke kaarten komen binnenkort terug, makkelijke pas later.'}` : weakOnly ? 'Je hebt geen foute kaarten meer. Goed bezig!' : 'Alle kaarten zijn up-to-date. Kom later terug of kies "Alles door elkaar".'}</p>
         <button class="btn primary" data-a="back">Terug</button></div></div>`;
       return;
     }
     const s = subs[c.subjectId];
+    const rev = reversed(c);
     root.innerHTML = `
     <div class="view practice" style="--c:${s?.color || '#888'}">
       <header class="topbar sub"><div class="row"><button class="icon-btn" data-a="back" aria-label="Stoppen">${icon('x')}</button><div><h1>${esc(title)}</h1><p class="muted">${done} / ${total}${cram ? ' · oefenmodus' : ''}</p></div></div></header>
       <div class="progress"><i style="width:${total ? done / total * 100 : 0}%"></i></div>
       <button class="flash ${flipped ? 'flipped' : ''}" data-a="flip">
-        <span class="flash-kind">${s ? esc(s.name) + ' · ' : ''}${c.kind === 'vraag' ? 'Oefenvraag' : c.kind === 'begrip' ? 'Begrip' : 'Kaart'}</span>
-        <span class="flash-front">${esc(c.front)}</span>
-        ${flipped ? `<span class="flash-back md">${markdown(c.back)}</span>` : '<span class="flash-hint">Tik om het antwoord te zien</span>'}
+        <span class="flash-kind">${s ? esc(s.name) + ' · ' : ''}${rev ? 'Welk begrip is dit?' : c.kind === 'vraag' ? 'Oefenvraag' : c.kind === 'begrip' ? 'Begrip' : 'Kaart'}</span>
+        ${rev ? `<span class="flash-front long md">${markdown(c.back)}</span>` : `<span class="flash-front">${esc(c.front)}</span>`}
+        ${flipped ? (rev ? `<span class="flash-back flash-answer">${esc(c.front)}</span>` : `<span class="flash-back md">${markdown(c.back)}</span>`) : '<span class="flash-hint">Tik om het antwoord te zien</span>'}
       </button>
       <div class="grades">${flipped ? GRADES.map(g => `<button class="grade ${g.cls}" data-g="${g.key}"><b>${g.label}</b><small>${cram && g.key ? '' : intervalLabel(c.srs, g.key)}</small></button>`).join('') : `<button class="btn primary block" data-a="flip">Toon antwoord</button>`}</div>
     </div>`;
   }
   async function grade(g) {
     const c = queue.shift();
-    if (!cram || g === 0) { c.srs = schedule(c.srs, g); await db.put('cards', c); }
+    if (!cram || g === 0) c.srs = schedule(c.srs, g);
+    c.last = { g, t: Date.now() }; // voor 'foute kaarten' en de voortgang per set
+    await db.put('cards', c);
+    revOf.delete(c.id);
     if (g === 0) queue.splice(Math.min(3 + Math.floor(Math.random() * 4), queue.length), 0, c);
     else done++;
     flipped = false;

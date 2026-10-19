@@ -15,6 +15,17 @@ export function shuffle(arr) {
   return a;
 }
 
+// Laatste beoordeling van een kaart (0 = Opnieuw … 3 = Makkelijk), ook bij oefenen per set.
+// Oudere kaarten zonder `last`: afleiden uit de herhaalgegevens.
+export function lastGrade(c) {
+  if (c.last) return c.last.g;
+  if (c.srs?.reps > 0) return 2;
+  if (c.srs?.lapses > 0) return 0;
+  return null;
+}
+export const isWeak = c => { const g = lastGrade(c); return g !== null && g <= 1; };  // Opnieuw of Moeilijk
+export const isKnown = c => { const g = lastGrade(c); return g !== null && g >= 2; }; // Goed of Makkelijk
+
 // Sets: kaarten uit een pakket met `deck` (bijv. per college), anders per samenvatting, anders 'Eigen kaarten'
 export function deckKey(c) { return c.deck ? 'd:' + c.deck : c.summaryId ? 's:' + c.summaryId : 'eigen'; }
 export function deckSets(cards, summaries = []) {
