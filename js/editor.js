@@ -662,7 +662,9 @@ export async function openEditor(root, notebookId, { onExit }) {
   // Touch: Pencil mag nooit scrollen, vingers wel (palm rejection); twee vingers = zoomen.
   let pinch = null, gesture = null;
   const isStylus = t => t.touchType === 'stylus';
-  const isPalm = t => (t.radiusX || 0) > 28 || Date.now() - penAt < 450;
+  // Handpalm = aanraking vlak na de Pencil, of een groot contactvlak terwijl je aan het schrijven bent.
+  // (Een gewone vingertop meldt op de iPad vaak al radiusX > 28; die moet gewoon kunnen scrollen.)
+  const isPalm = t => Date.now() - penAt < 450 || ((t.radiusX || 0) > 45 && Date.now() - penAt < 3000);
   function onTouchStart(e) {
     const all = [...e.touches];
     if (all.some(isStylus)) { e.preventDefault(); return; }
