@@ -233,6 +233,11 @@ button:disabled { opacity: .4; cursor: default; }
 .card-row b { grid-area: front; }
 .card-row small { grid-area: back; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .card-row em { grid-area: due; font-style: normal; color: var(--muted); font-size: 12px; }
+.deck-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin-bottom: 8px; }
+.deck-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: left; padding: 14px 16px; background: var(--surface); border-radius: 14px; box-shadow: var(--shadow); border-left: 4px solid var(--c, var(--accent)); color: var(--text); }
+.deck-row span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.deck-row small { color: var(--muted); font-size: 13px; }
+.deck-row svg { flex: none; color: var(--c, var(--accent)); }
 
 .nb-kind { position: absolute; left: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; background: rgba(29, 30, 34, .72); color: #fff; padding: 3px 7px; border-radius: 999px; }
 

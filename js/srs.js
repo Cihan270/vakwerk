@@ -8,6 +8,29 @@ export const GRADES = [
   { key: 3, label: 'Makkelijk', cls: 'easy' },
 ];
 
+// Echt willekeurig door elkaar (Fisher-Yates), zodat je nooit twee keer dezelfde volgorde krijgt
+export function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+
+// Sets: kaarten uit een pakket met `deck` (bijv. per college), anders per samenvatting, anders 'Eigen kaarten'
+export function deckKey(c) { return c.deck ? 'd:' + c.deck : c.summaryId ? 's:' + c.summaryId : 'eigen'; }
+export function deckSets(cards, summaries = []) {
+  const sums = new Map(summaries.map(s => [s.id, s]));
+  const sets = new Map();
+  for (const c of cards) {
+    const key = deckKey(c);
+    if (!sets.has(key)) {
+      const sum = sums.get(c.summaryId);
+      sets.set(key, { key, label: c.deck || sum?.title || 'Eigen kaarten', order: c.deckOrder ?? (sum ? 1000 : 2000), date: sum?.date || '', cards: [] });
+    }
+    sets.get(key).cards.push(c);
+  }
+  return [...sets.values()].sort((a, b) => a.order - b.order || a.date.localeCompare(b.date) || a.label.localeCompare(b.label));
+}
+
 export function startOfDay(t = Date.now()) { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); }
 export function newSrs() { return { due: 0, ivl: 0, ease: 2.5, reps: 0, lapses: 0 }; }
 export function isDue(card, now = Date.now()) { return (card.srs?.due ?? 0) <= now; }

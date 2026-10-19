@@ -6,7 +6,7 @@ import {
   parseDay, MONTHS, MONTHS_SHORT, APP_VERSION,
 } from './util.js';
 import { markdown, plainText } from './markdown.js';
-import { GRADES, schedule, isDue, isNew, intervalLabel, newSrs } from './srs.js';
+import { GRADES, schedule, isDue, isNew, intervalLabel, newSrs, shuffle, deckKey, deckSets } from './srs.js';
 import { importFile, exportBackup, seedDemo, removeDemo, wipeAll, isDemoSubject } from './pack.js';
 import { PAPERS } from './ink.js';
 import { shiftBlock, undoShift } from './planner.js';
@@ -472,7 +472,7 @@ export async function subjectView(root, id, tab = 'notities') {
   if (tab === 'notities') body = notesTab(notebooks.filter(n => n.kind !== 'summary'), 'note');
   if (tab === 'samenvattingen') body = summariesTab(summaries, notebooks.filter(n => n.kind === 'summary'));
   if (tab === 'opdrachten') body = tasksTab(tasks, s);
-  if (tab === 'oefenen') body = practiceTab(cards, s);
+  if (tab === 'oefenen') body = practiceTab(cards, s, summaries);
   if (tab === 'planning') {
     const done = plan.filter(p => p.kind === 'study' && p.done).length, total = plan.filter(p => p.kind === 'study').length;
     body = `<div class="row gap wrap"><span class="muted">${done} van ${total} studieblokken af</span><button class="btn small" data-a="newblock">${icon('plus', 16)} Blok</button></div>
@@ -519,6 +519,7 @@ export async function subjectView(root, id, tab = 'notities') {
       case 'newcard': if (await editCard({ subjectId: id })) rerender(); return;
       case 'review': return go('#/oefenen/' + id);
       case 'cram': return go('#/oefenen/' + id + '?alles');
+      case 'set': return go(`#/oefenen/${id}?set=${encodeURIComponent(a.dataset.set)}`);
       case 'more': {
         const v = await menu(a, [
           { label: 'Vak bewerken', value: 'edit', icon: 'edit' },
@@ -579,9 +580,10 @@ function tasksTab(tasks, s) {
     ${done.length ? `<details class="done-list"><summary>Afgerond (${done.length})</summary><div class="tasks big">${done.map(t => taskRow(t, s)).join('')}</div></details>` : ''}`;
 }
 
-function practiceTab(cards, s) {
+function practiceTab(cards, s, summaries = []) {
   const due = cards.filter(c => isDue(c)).length;
   const fresh = cards.filter(isNew).length;
+  const sets = deckSets(cards, summaries);
   return `<div class="stats">
       <div class="stat"><b>${due}</b><small>te herhalen</small></div>
       <div class="stat"><b>${fresh}</b><small>nieuw</small></div>
@@ -589,9 +591,14 @@ function practiceTab(cards, s) {
     </div>
     <div class="row gap wrap">
       <button class="btn primary" data-a="review" ${due ? '' : 'disabled'}>${icon('cards', 18)} Start herhalen</button>
-      <button class="btn" data-a="cram" ${cards.length ? '' : 'disabled'}>Alles oefenen</button>
+      <button class="btn" data-a="cram" ${cards.length ? '' : 'disabled'}>Alles door elkaar</button>
       <button class="btn ghost" data-a="newcard">${icon('plus', 18)} Kaart maken</button>
     </div>
+    ${sets.length > 1 ? `<h3 class="sec-title">Per set leren</h3>
+    <div class="deck-list">${sets.map(d => {
+      const dd = d.cards.filter(c => isDue(c)).length;
+      return `<button class="deck-row" data-a="set" data-set="${esc(d.key)}"><span><b>${esc(d.label)}</b><small>${d.cards.length} kaart${d.cards.length === 1 ? '' : 'en'}${dd ? ` · ${dd} te herhalen` : ''}</small></span>${icon('cards', 18)}</button>`;
+    }).join('')}</div>` : ''}
     ${cards.length ? `<input class="input card-filter" type="search" placeholder="Zoek in kaarten…">
     <div class="card-list">${cards.sort((a, b) => a.front.localeCompare(b.front)).map(c => `<button class="card-row" data-card="${c.id}">
       <span class="tag ${c.kind === 'vraag' ? 'q' : c.kind === 'begrip' ? 'ai' : ''}">${c.kind === 'vraag' ? 'Vraag' : c.kind === 'begrip' ? 'Begrip' : 'Eigen'}</span>
@@ -768,7 +775,10 @@ export async function summaryView(root, id, tab = 'tekst') {
 }
 
 // ================= OEFENEN =================
-export async function practiceView(root, scope, cram = false) {
+export async function practiceView(root, scope, query = '') {
+  const q = new URLSearchParams(query || '');
+  const setKey = q.get('set');
+  const cram = q.has('alles') || !!setKey; // een set leer je helemaal, niet alleen wat 'te herhalen' is
   let cards;
   let title = 'Herhalen';
   let back = '#/';
@@ -784,12 +794,22 @@ export async function practiceView(root, scope, cram = false) {
     cards = await db.by('cards', 'subjectId', scope);
     title = s?.name || 'Oefenen';
     back = `#/vak/${scope}/oefenen`;
+    if (setKey) {
+      cards = cards.filter(c => deckKey(c) === setKey);
+      const set = deckSets(cards, await db.by('summaries', 'subjectId', scope))[0];
+      if (set) title = set.label;
+    }
   }
   const subs = Object.fromEntries((await db.all('subjects')).map(s => [s.id, s]));
-  let queue = (cram ? cards : cards.filter(c => isDue(c)))
+  // Hetzelfde begrip uit twee sets maar één keer vragen als je alles door elkaar oefent
+  if (cram && !setKey) {
+    const seen = new Set();
+    cards = cards.filter(c => { const k = c.front.trim().toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+  }
+  // Herhalen: eerst de kaarten die het langst over tijd zijn; daarna altijd husselen, zodat de volgorde elke keer anders is
+  let queue = shuffle((cram ? cards : cards.filter(c => isDue(c)))
     .sort((a, b) => (isNew(a) - isNew(b)) || (a.srs?.due || 0) - (b.srs?.due || 0))
-    .slice(0, cram ? 200 : 60);
-  if (cram) queue.sort(() => Math.random() - 0.5);
+    .slice(0, cram ? 300 : 60));
   const total = queue.length;
   let done = 0, flipped = false;
 
@@ -818,7 +838,7 @@ export async function practiceView(root, scope, cram = false) {
   async function grade(g) {
     const c = queue.shift();
     if (!cram || g === 0) { c.srs = schedule(c.srs, g); await db.put('cards', c); }
-    if (g === 0) queue.splice(Math.min(3, queue.length), 0, c);
+    if (g === 0) queue.splice(Math.min(3 + Math.floor(Math.random() * 4), queue.length), 0, c);
     else done++;
     flipped = false;
     draw();

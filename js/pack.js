@@ -79,13 +79,28 @@ export async function importPack(data) {
   const out = { summaries: [], cards: [], assignments: [], plan: [] };
   const count = { summaries: 0, terms: 0, questions: 0, assignments: 0, plan: 0 };
   const now = Date.now();
+  let deckIndex = 0;
   for (const it of items) {
     const subjectId = mapping[it.subject] || findSubject(subjects, it.subject).id;
     const key = it.id || `${slug(it.subject)}-${it.date || isoDay()}-${slug(it.title)}`;
     const terms = (it.terms || []).map(t => ({ term: t.term ?? t.begrip ?? t.front ?? '', definition: t.definition ?? t.uitleg ?? t.back ?? '' })).filter(t => t.term);
     const questions = (it.questions || []).map(q => ({ question: q.question ?? q.vraag ?? q.q ?? '', answer: q.answer ?? q.antwoord ?? q.a ?? '' })).filter(q => q.question);
 
-    if (it.summary || terms.length || questions.length) {
+    // Set flitskaarten (`deck`, zonder samenvatting): alleen kaarten, gegroepeerd onder de naam van de set
+    if (it.deck && !it.summary) {
+      const order = it.order ?? deckIndex++;
+      const cards = [
+        ...terms.map(t => ({ id: `pk:${key}:t:${slug(t.term)}`, front: t.term, back: t.definition, kind: 'begrip' })),
+        ...questions.map((q, i) => ({ id: `pk:${key}:q:${i}`, front: q.question, back: q.answer, kind: 'vraag' })),
+      ];
+      for (const c of cards) {
+        const ex = exCards.get(c.id);
+        out.cards.push({ ...c, subjectId, summaryId: null, deck: it.deck, deckOrder: order, srs: ex?.srs || { ...newSrs(), due: now }, created: ex?.created || now });
+      }
+      count.terms += terms.length;
+      count.questions += questions.length;
+      count.decks = (count.decks || 0) + 1;
+    } else if (it.summary || terms.length || questions.length) {
       const id = 'pk:' + key;
       const old = exSum.get(id);
       out.summaries.push({
@@ -136,6 +151,7 @@ export async function importPack(data) {
   const parts = [
     count.plan && `planning met ${count.plan} blokken`,
     count.summaries && `${count.summaries} samenvatting${count.summaries > 1 ? 'en' : ''}`,
+    count.decks && `${count.decks} set${count.decks > 1 ? 's' : ''} flitskaarten`,
     count.terms && `${count.terms} begrippen`,
     count.questions && `${count.questions} oefenvragen`,
     count.assignments && `${count.assignments} opdracht${count.assignments > 1 ? 'en' : ''}`,

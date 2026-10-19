@@ -61,6 +61,16 @@ Claude levert samenvattingen aan via een **pakketbestand** dat de gebruiker in d
 }
 ```
 
+### Sets flitskaarten (optioneel)
+
+Een item met `deck` en zonder `summary` wordt alleen een set flitskaarten (geen samenvatting). In de app staat elke set
+onder Vak › Oefenen › **Per set leren**; "Alles door elkaar" oefent alle kaarten van het vak gehusseld.
+
+```json
+{ "id": "ot-flits-s3", "subject": "Organization Theory", "deck": "Sessie 3 · Systems & contingency theory", "order": 1,
+  "sources": ["Lecture 3 OT Woo_2026 Sept.pdf"], "terms": [{ "term": "Holism", "definition": "..." }] }
+```
+
 - Optioneel `subjects: [{ name, color, aliases }]` bovenaan het pakket: die vakken worden zonder vraag aangemaakt (of hun Canvas-namen aangevuld).
 - **Inhalen** (`js/planner.js`): niet-afgevinkte studieblokken van eerdere dagen schuiven bij het openen van de app door naar de volgende momenten van hetzelfde vak, vóór dat vak's tentamen; "Vrij"-blokken worden opgeofferd (dag vóór een tentamen als laatste). Doorgeschoven items krijgen `movedFrom`; een nieuwe import laat die plek staan.
 - `slot`: 0 = ochtend, 1 = middag, 2 = avond. `kind`: `study` (afvinkbaar), `class`, `exam` (geeft een aftelkaart op het dashboard), `rest`.

@@ -31,7 +31,7 @@ async function route() {
       case 'vak': await subjectView(app, parts[1], parts[2]); break;
       case 'notitie': cleanup = await openEditor(app, parts[1], { onExit: () => { cleanup = null; location.hash = backHash; } }); break;
       case 'samenvatting': await summaryView(app, parts[1], parts[2]); break;
-      case 'oefenen': cleanup = await practiceView(app, parts[1], query === 'alles'); break;
+      case 'oefenen': cleanup = await practiceView(app, parts[1], query); break;
       case 'instellingen': await settingsView(app); break;
       case 'planning': await planningView(app, parts[1] || null); break;
       case 'koppel': { // #/koppel?bron=<inbox-link> — eenmalig de inbox van Claude koppelen
