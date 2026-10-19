@@ -492,6 +492,9 @@ button:disabled { opacity: .4; cursor: default; }
 .sel-bar .danger { color: #ff8a8a; }
 
 .ed-status { position: absolute; right: 14px; bottom: calc(14px + var(--safe-b)); display: flex; gap: 6px; z-index: 4; pointer-events: none; }
+.ed-status .pg-nav { padding: 0 8px; }
+.ed-status .pg-nav:disabled { opacity: .35; }
+.ed-status .pg-next svg { transform: scaleX(-1); }
 .ed-status .pill { pointer-events: auto; background: rgba(29, 30, 34, .78); color: #fff; display: inline-flex; align-items: center; font-variant-numeric: tabular-nums; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .ed-player {
   position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(16px + var(--safe-b)); z-index: 6; width: min(680px, calc(100% - 24px));

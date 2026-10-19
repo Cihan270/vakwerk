@@ -75,7 +75,7 @@ export async function openEditor(root, notebookId, { onExit }) {
       </div>
     </header>
     <div class="ed-scroll${board ? ' board' : ''}"><div class="ed-pages"></div></div>
-    <div class="ed-status"><button class="pill zoom-ind" data-a="zoomreset" hidden></button><span class="pill pg-ind"></span></div>
+    <div class="ed-status"><button class="pill zoom-ind" data-a="zoomreset" hidden></button><button class="pill pg-nav" data-a="pgprev" aria-label="Vorige pagina">${icon('back', 18)}</button><button class="pill pg-ind" data-a="pglist" aria-label="Naar pagina…"></button><button class="pill pg-nav pg-next" data-a="pgnext" aria-label="Volgende pagina">${icon('back', 18)}</button></div>
     <div class="ed-player" hidden>
       <button class="icon-btn" data-a="p-back" aria-label="10 seconden terug">${icon('rewind')}</button>
       <button class="icon-btn play" data-a="p-play" aria-label="Afspelen">${icon('play')}</button>
@@ -277,10 +277,27 @@ export async function openEditor(root, notebookId, { onExit }) {
     return best;
   }
   function updatePageInd() {
-    const el = $('.pg-ind', ed);
+    const el = $('.pg-ind', ed), i = currentPageIndex();
     el.hidden = board;
-    el.textContent = `${currentPageIndex() + 1} / ${pages.length}`;
+    el.textContent = `${i + 1} / ${pages.length}`;
+    // Vorige/volgende: ook als je alleen met de Pencil werkt of 'tekenen met vinger' aan staat (dan scrolt je vinger niet)
+    $$('.pg-nav', ed).forEach(b => { b.hidden = board || pages.length < 2; });
+    $('[data-a=pgprev]', ed).disabled = i === 0;
+    $('[data-a=pgnext]', ed).disabled = i === pages.length - 1;
   }
+  // navTo onthoudt waar je heen wilde, zodat snel twee keer tikken ook twee pagina's verder gaat
+  let navTo = null;
+  function goToPage(i) {
+    i = Math.max(0, Math.min(pages.length - 1, i));
+    const el = S.get(pages[i].id).el;
+    const top = scrollEl.scrollTop + el.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top - 12;
+    const nav = navTo = { i, t: Date.now() };
+    const y = Math.max(0, Math.min(top, scrollEl.scrollHeight - scrollEl.clientHeight));
+    scrollEl.scrollTo({ top: y, behavior: 'smooth' });
+    // Vangnet: als de vloeiende scroll onderbroken wordt, alsnog op de pagina uitkomen
+    setTimeout(() => { if (navTo === nav && Math.abs(scrollEl.scrollTop - y) > 4) scrollEl.scrollTop = y; updatePageInd(); }, 600);
+  }
+  const navBase = () => navTo && Date.now() - navTo.t < 700 ? navTo.i : currentPageIndex();
   let scrollRaf = 0;
   scrollEl.addEventListener('scroll', () => { if (!scrollRaf) scrollRaf = requestAnimationFrame(() => { scrollRaf = 0; updatePageInd(); }); }, { passive: true });
   updatePageInd();
@@ -384,6 +401,16 @@ export async function openEditor(root, notebookId, { onExit }) {
     }
   });
   $('.ed-status', ed).addEventListener('click', async e => {
+    const nav = e.target.closest('[data-a=pgprev], [data-a=pgnext], [data-a=pglist]');
+    if (nav) {
+      const i = navBase();
+      if (nav.dataset.a === 'pgprev') return goToPage(i - 1);
+      if (nav.dataset.a === 'pgnext') return goToPage(i + 1);
+      if (pages.length < 2) return;
+      const v = await menu(nav, pages.map((p, k) => ({ label: `Pagina ${k + 1}${k === i ? ' (hier)' : ''}`, value: String(k), icon: 'page' })), { align: 'right' });
+      if (v != null) goToPage(+v);
+      return;
+    }
     const zb = e.target.closest('[data-a=zoomreset]');
     if (!zb) return;
     if (board) {
