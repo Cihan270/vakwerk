@@ -73,6 +73,20 @@ export async function importPack(data) {
     }
   }
 
+  // Planning vervangen: niet-afgevinkte studieblokken van een vak vanaf een datum weghalen (ook als ze al zijn doorgeschoven).
+  // Afgevinkte blokken, colleges en tentamens blijven staan.
+  let replaced = 0;
+  for (const r of data.replacePlan || []) {
+    const sid = r?.subject && findSubject(subjects, r.subject)?.id;
+    if (!sid) continue;
+    const from = r.from || isoDay();
+    const old = (await db.by('plan', 'subjectId', sid)).filter(p => p.kind === 'study' && !p.done && (p.date >= from || (p.movedFrom || '') >= from));
+    if (!old.length) continue;
+    if (!await confirmDialog(`Dit pakket vervangt je planning voor ${r.subject}: ${old.length} niet-afgevinkte studieblok${old.length === 1 ? '' : 'ken'} vanaf ${from.slice(8, 10)}-${from.slice(5, 7)} ${old.length === 1 ? 'wordt' : 'worden'} vervangen door de nieuwe. Afgevinkte blokken, colleges en het tentamen blijven staan.`, { ok: 'Vervangen', danger: false, title: 'Planning vervangen' })) return null;
+    await db.delMany('plan', old.map(p => p.id));
+    replaced += old.length;
+  }
+
   // Eerst alles in één keer lezen, daarna alles in één keer wegschrijven (snel, ook in de artifact-database)
   const byId = async s => new Map((await db.all(s)).map(x => [x.id, x]));
   const [exSum, exCards, exTasks, exPlan] = await Promise.all(['summaries', 'cards', 'assignments', 'plan'].map(byId));
@@ -149,7 +163,7 @@ export async function importPack(data) {
   if (data.planNotes) await db.put('meta', { id: 'planNotes', value: { title: data.planTitle || 'Planning', notes: data.planNotes } });
 
   const parts = [
-    count.plan && `planning met ${count.plan} blokken`,
+    count.plan && `planning met ${count.plan} blokken${replaced ? ` (${replaced} oude vervangen)` : ''}`,
     count.summaries && `${count.summaries} samenvatting${count.summaries > 1 ? 'en' : ''}`,
     count.decks && `${count.decks} set${count.decks > 1 ? 's' : ''} flitskaarten`,
     count.terms && `${count.terms} begrippen`,

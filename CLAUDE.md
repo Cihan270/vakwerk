@@ -73,6 +73,7 @@ onder Vak › Oefenen › **Per set leren**; "Alles door elkaar" oefent alle kaa
 
 - Optioneel `subjects: [{ name, color, aliases }]` bovenaan het pakket: die vakken worden zonder vraag aangemaakt (of hun Canvas-namen aangevuld).
 - **Inhalen** (`js/planner.js`): niet-afgevinkte studieblokken van eerdere dagen schuiven bij het openen van de app door naar de volgende momenten van hetzelfde vak, vóór dat vak's tentamen; "Vrij"-blokken worden opgeofferd (dag vóór een tentamen als laatste). Doorgeschoven items krijgen `movedFrom`; een nieuwe import laat die plek staan.
+- **Planning vervangen**: `replacePlan: [{ "subject": "Calculus A", "from": "2026-10-19" }]` haalt (na bevestiging) de niet-afgevinkte studieblokken van dat vak vanaf die datum weg, ook doorgeschoven blokken. Gebruik dan nieuwe `id`'s voor de nieuwe blokken.
 - `slot`: 0 = ochtend, 1 = middag, 2 = avond. `kind`: `study` (afvinkbaar), `class`, `exam` (geeft een aftelkaart op het dashboard), `rest`.
 - Persoonlijke planningen horen in OneDrive, **niet** in deze (publieke) repo. Lokaal testen kan via `.local-test/` (staat in .gitignore).
 
