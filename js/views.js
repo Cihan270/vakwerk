@@ -7,6 +7,7 @@ import {
 } from './util.js';
 import { markdown, plainText } from './markdown.js';
 import { GRADES, schedule, isDue, isNew, intervalLabel, newSrs, shuffle, deckKey, deckSets, isWeak, isKnown } from './srs.js';
+import { buildVocab, keyTermsFor, checkAnswer, checkTerm, findSpans, answerSpans } from './keyterms.js';
 import { importFile, exportBackup, seedDemo, removeDemo, wipeAll, isDemoSubject } from './pack.js';
 import { PAPERS } from './ink.js';
 import { shiftBlock, undoShift } from './planner.js';
@@ -473,7 +474,7 @@ export async function subjectView(root, id, tab = 'notities') {
   if (tab === 'notities') body = notesTab(notebooks.filter(n => n.kind !== 'summary'), 'note');
   if (tab === 'samenvattingen') body = summariesTab(summaries, notebooks.filter(n => n.kind === 'summary'));
   if (tab === 'opdrachten') body = tasksTab(tasks, s);
-  if (tab === 'oefenen') body = practiceTab(cards, s, summaries, await getSetting('practiceDir', 'normal'));
+  if (tab === 'oefenen') body = practiceTab(cards, s, summaries, await getSetting('practiceDir', 'normal'), await getSetting('practiceMode', 'flip'));
   if (tab === 'planning') {
     const done = plan.filter(p => p.kind === 'study' && p.done).length, total = plan.filter(p => p.kind === 'study').length;
     body = `<div class="row gap wrap"><span class="muted">${done} van ${total} studieblokken af</span><button class="btn small" data-a="newblock">${icon('plus', 16)} Blok</button></div>
@@ -531,6 +532,7 @@ export async function subjectView(root, id, tab = 'notities') {
       case 'setweak': return go(`#/oefenen/${id}?fout&set=${encodeURIComponent(a.dataset.set)}`);
       case 'weak': return go(`#/oefenen/${id}?fout`);
       case 'dir': await setSetting('practiceDir', a.dataset.dir); return rerender();
+      case 'mode': await setSetting('practiceMode', a.dataset.mode); return rerender();
       case 'more': {
         const v = await menu(a, [
           { label: 'Vak bewerken', value: 'edit', icon: 'edit' },
@@ -597,8 +599,35 @@ const PRACTICE_DIRS = [
   { v: 'reverse', label: 'Uitleg → begrip' },
   { v: 'mixed', label: 'Gemengd' },
 ];
+const PRACTICE_MODES = [
+  { v: 'flip', label: 'Tikken' },
+  { v: 'type', label: 'Typen' },
+];
 
-function practiceTab(cards, s, summaries = [], dir = 'normal') {
+// Tekst met gemarkeerde stukken (spans: { start, end, hit })
+function markText(text, spans) {
+  let html = '', at = 0;
+  for (const s of spans) {
+    html += esc(text.slice(at, s.start)) + `<mark class="${s.hit ? 'tc-hit' : 'tc-miss'}">${esc(text.slice(s.start, s.end))}</mark>`;
+    at = s.end;
+  }
+  return (html + esc(text.slice(at))).replace(/\n/g, '<br>');
+}
+// Kernbegrippen in het (al opgemaakte) modelantwoord markeren: groen = jij had hem ook, oranje = gemist
+function markDom(el, terms) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const n of nodes) {
+    const spans = findSpans(n.data, terms);
+    if (!spans.length) continue;
+    const tpl = document.createElement('template');
+    tpl.innerHTML = markText(n.data, spans);
+    n.replaceWith(tpl.content);
+  }
+}
+
+function practiceTab(cards, s, summaries = [], dir = 'normal', mode = 'flip') {
   const due = cards.filter(c => isDue(c)).length;
   const fresh = cards.filter(isNew).length;
   const weak = cards.filter(isWeak).length;
@@ -610,6 +639,8 @@ function practiceTab(cards, s, summaries = [], dir = 'normal') {
     </div>
     <div class="row gap wrap practice-dir"><span class="muted small">Vraag:</span>
       <div class="seg small">${PRACTICE_DIRS.map(d => `<button class="pill ${d.v === dir ? 'on' : ''}" data-a="dir" data-dir="${d.v}">${d.label}</button>`).join('')}</div>
+      <span class="muted small">Antwoord:</span>
+      <div class="seg small">${PRACTICE_MODES.map(m => `<button class="pill ${m.v === mode ? 'on' : ''}" data-a="mode" data-mode="${m.v}">${m.label}</button>`).join('')}</div>
     </div>
     <div class="row gap wrap">
       <button class="btn primary" data-a="review" ${due ? '' : 'disabled'}>${icon('cards', 18)} Start herhalen</button>
@@ -854,6 +885,57 @@ export async function practiceView(root, scope, query = '') {
   const total = queue.length;
   let done = 0, flipped = false;
 
+  // Typen: eerst zelf je antwoord typen, dan het modelantwoord met een check op de kernbegrippen
+  let mode = await getSetting('practiceMode', 'flip');
+  let typed = '', result = null;
+  const vocabOf = new Map();
+  for (const sid of new Set(queue.map(c => c.subjectId))) vocabOf.set(sid, buildVocab(await db.by('cards', 'subjectId', sid)));
+  const keysOf = new Map();
+  const keyTerms = c => {
+    if (!keysOf.has(c.id)) keysOf.set(c.id, keyTermsFor(c, vocabOf.get(c.subjectId) || []));
+    return keysOf.get(c.id);
+  };
+  function check(c, rev) {
+    result = rev ? { rev: true, ok: checkTerm(typed, c.front) } : checkAnswer(typed, keyTerms(c));
+    flipped = true;
+    draw();
+  }
+
+  function typedView(c, s, rev) {
+    const kind = `${s ? esc(s.name) + ' · ' : ''}${rev ? 'Welk begrip is dit?' : c.kind === 'vraag' ? 'Oefenvraag' : c.kind === 'begrip' ? 'Begrip' : 'Kaart'}`;
+    const prompt = rev ? `<div class="flash-front long md">${markdown(c.back)}</div>` : `<div class="flash-front">${esc(c.front)}</div>`;
+    if (!flipped) return `
+      <div class="flash typing">
+        <span class="flash-kind">${kind}</span>
+        ${prompt}
+        <textarea class="type-answer" rows="${rev ? 2 : 6}" placeholder="${rev ? 'Typ het begrip…' : 'Typ je antwoord… gebruik de vakbegrippen'}" autocapitalize="sentences" spellcheck="true">${esc(typed)}</textarea>
+      </div>
+      <div class="grades"><button class="btn primary block" data-a="check">Controleer <small class="kbd">${/Mac|iPad|iPhone/.test(navigator.platform) ? '⌘↵' : 'Ctrl+↵'}</small></button></div>`;
+    const r = result;
+    let verdict;
+    if (r.rev) verdict = `<div class="term-check"><b class="${r.ok ? 'ok-txt' : 'weak-txt'}">${r.ok ? '✓ Juist begrip' : '✗ Niet het gezochte begrip'}</b></div>`;
+    else if (r.total) verdict = `<div class="term-check">
+        <div class="tc-head"><b>Kernbegrippen: ${r.hits} van ${r.total}</b><span class="tc-bar"><i style="width:${Math.round(r.ratio * 100)}%"></i></span></div>
+        <div class="tc-chips">${r.terms.map(t => `<span class="tc ${t.hit ? 'hit' : 'miss'}">${t.hit ? '✓' : '✗'} ${esc(t.label)}</span>`).join('')}</div>
+        ${r.bonus.length ? `<div class="tc-chips bonus"><small class="muted">Namen & jaartallen</small>${r.bonus.map(t => `<span class="tc ${t.hit ? 'hit' : 'miss'}">${t.hit ? '✓' : '✗'} ${esc(t.label)}</span>`).join('')}</div>` : ''}
+      </div>`;
+    else verdict = `<div class="term-check"><small class="muted">Voor deze kaart zijn geen kernbegrippen gevonden: vergelijk zelf.</small></div>`;
+    const mine = typed.trim() ? markText(typed, r.rev ? [] : answerSpans(typed, r)) : '<em class="muted">Niets ingevuld</em>';
+    const model = rev ? `<div class="flash-answer">${esc(c.front)}</div>` : `<div class="md model">${markdown(c.back)}</div>`;
+    const advice = r.rev ? (r.ok ? 2 : 0) : r.advice;
+    return `
+      <div class="flash typing flipped">
+        <span class="flash-kind">${kind}</span>
+        ${prompt}
+        ${verdict}
+        <div class="type-compare">
+          <section><h4>Jouw antwoord</h4><div class="mine">${mine}</div></section>
+          <section><h4>Modelantwoord</h4>${model}</section>
+        </div>
+      </div>
+      <div class="grades">${GRADES.map(g => `<button class="grade ${g.cls} ${g.key === advice ? 'suggest' : ''}" data-g="${g.key}"><b>${g.label}</b><small>${g.key === advice ? 'advies' : cram && g.key ? '' : intervalLabel(c.srs, g.key)}</small></button>`).join('')}</div>`;
+  }
+
   function draw() {
     const c = queue[0];
     if (!c) {
@@ -865,10 +947,18 @@ export async function practiceView(root, scope, query = '') {
     }
     const s = subs[c.subjectId];
     const rev = reversed(c);
-    root.innerHTML = `
+    const head = `
     <div class="view practice" style="--c:${s?.color || '#888'}">
-      <header class="topbar sub"><div class="row"><button class="icon-btn" data-a="back" aria-label="Stoppen">${icon('x')}</button><div><h1>${esc(title)}</h1><p class="muted">${done} / ${total}${cram ? ' · oefenmodus' : ''}</p></div></div></header>
-      <div class="progress"><i style="width:${total ? done / total * 100 : 0}%"></i></div>
+      <header class="topbar sub"><div class="row"><button class="icon-btn" data-a="back" aria-label="Stoppen">${icon('x')}</button><div><h1>${esc(title)}</h1><p class="muted">${done} / ${total}${cram ? ' · oefenmodus' : ''}</p></div></div>
+        <div class="actions"><div class="seg small">${PRACTICE_MODES.map(m => `<button class="pill ${m.v === mode ? 'on' : ''}" data-a="mode" data-mode="${m.v}">${m.label}</button>`).join('')}</div></div></header>
+      <div class="progress"><i style="width:${total ? done / total * 100 : 0}%"></i></div>`;
+    if (mode === 'type') {
+      root.innerHTML = head + typedView(c, s, rev) + '</div>';
+      if (flipped && !result.rev) { const m = root.querySelector('.model'); if (m) markDom(m, result.terms.concat(result.bonus)); }
+      if (!flipped) { const ta = root.querySelector('.type-answer'); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+      return;
+    }
+    root.innerHTML = head + `
       <button class="flash ${flipped ? 'flipped' : ''}" data-a="flip">
         <span class="flash-kind">${s ? esc(s.name) + ' · ' : ''}${rev ? 'Welk begrip is dit?' : c.kind === 'vraag' ? 'Oefenvraag' : c.kind === 'begrip' ? 'Begrip' : 'Kaart'}</span>
         ${rev ? `<span class="flash-front long md">${markdown(c.back)}</span>` : `<span class="flash-front">${esc(c.front)}</span>`}
@@ -886,18 +976,34 @@ export async function practiceView(root, scope, query = '') {
     if (g === 0) queue.splice(Math.min(3 + Math.floor(Math.random() * 4), queue.length), 0, c);
     else done++;
     flipped = false;
+    typed = '';
+    result = null;
     draw();
   }
-  root.onclick = e => {
+  root.oninput = e => { if (e.target.matches('.type-answer')) typed = e.target.value; };
+  root.onclick = async e => {
     const g = e.target.closest('[data-g]');
     if (g) return grade(+g.dataset.g);
-    const a = e.target.closest('[data-a]')?.dataset.a;
+    const el = e.target.closest('[data-a]');
+    const a = el?.dataset.a;
     if (a === 'back') go(back);
     if (a === 'flip' && !flipped) { flipped = true; draw(); }
+    if (a === 'check' && queue[0]) check(queue[0], reversed(queue[0]));
+    if (a === 'mode' && el.dataset.mode !== mode) {
+      mode = el.dataset.mode;
+      await setSetting('practiceMode', mode);
+      flipped = false; result = null;
+      draw();
+    }
   };
   const key = e => {
     if (!root.querySelector('.practice')) return document.removeEventListener('keydown', key);
-    if (e.key === ' ') { e.preventDefault(); if (!flipped) { flipped = true; draw(); } }
+    if (!queue[0]) return;
+    if (e.target.matches?.('.type-answer')) {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); check(queue[0], reversed(queue[0])); }
+      return;
+    }
+    if (e.key === ' ') { e.preventDefault(); if (!flipped) { if (mode === 'type') check(queue[0], reversed(queue[0])); else { flipped = true; draw(); } } }
     if (flipped && '1234'.includes(e.key)) grade(+e.key - 1);
   };
   document.addEventListener('keydown', key);
