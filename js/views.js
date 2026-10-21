@@ -6,7 +6,7 @@ import {
   parseDay, MONTHS, MONTHS_SHORT, APP_VERSION,
 } from './util.js';
 import { markdown, plainText } from './markdown.js';
-import { GRADES, schedule, isDue, isNew, intervalLabel, newSrs, shuffle, deckKey, deckSets, isWeak, isKnown } from './srs.js';
+import { GRADES, schedule, isDue, isNew, intervalLabel, newSrs, shuffle, deckKey, deckSets, isWeak, isKnown, recordDir, smartDir, weightedShuffle } from './srs.js';
 import { buildVocab, keyTermsFor, checkAnswer, checkTerm, findSpans, answerSpans } from './keyterms.js';
 import { importFile, exportBackup, seedDemo, removeDemo, wipeAll, isDemoSubject } from './pack.js';
 import { PAPERS } from './ink.js';
@@ -605,6 +605,7 @@ const PRACTICE_DIRS = [
   { v: 'normal', label: 'Begrip → uitleg' },
   { v: 'reverse', label: 'Uitleg → begrip' },
   { v: 'mixed', label: 'Gemengd' },
+  { v: 'smart', label: 'Slim' }, // past zich aan: vraagt vaker de richting en kaarten die je fout doet
 ];
 const PRACTICE_MODES = [
   { v: 'flip', label: 'Tikken' },
@@ -881,7 +882,7 @@ export async function practiceView(root, scope, query = '') {
   const reversed = c => {
     if (c.kind === 'vraag' || dir === 'normal') return false;
     if (dir === 'reverse') return true;
-    if (!revOf.has(c.id)) revOf.set(c.id, Math.random() < 0.5);
+    if (!revOf.has(c.id)) revOf.set(c.id, dir === 'smart' ? smartDir(c) === 'r' : Math.random() < 0.5);
     return revOf.get(c.id);
   };
   // Hetzelfde begrip uit twee sets maar één keer vragen als je alles door elkaar oefent
@@ -899,15 +900,15 @@ export async function practiceView(root, scope, query = '') {
   const status = c => isWeak(c) ? 0 : isKnown(c) ? 2 : 1;
   pool = setKey && chunk
     ? pool.sort((a, b) => status(a) - status(b) || (a.deckOrder ?? 0) - (b.deckOrder ?? 0) || (a.pos ?? 999) - (b.pos ?? 999) || a.id.localeCompare(b.id))
-    : shuffle(pool);
+    : dir === 'smart' ? weightedShuffle(pool) : shuffle(pool);
   const total = pool.length;
   const rounds = chunk ? Math.max(1, Math.ceil(total / chunk)) : 1;
   let round = 0, roundCards = [], doneRound = 0, reviewing = false, finished = false, queue = [];
-  const startRound = (cardsOfRound, review = false) => { roundCards = cardsOfRound; queue = shuffle(cardsOfRound); doneRound = 0; reviewing = review; };
+  const startRound = (cardsOfRound, review = false) => { roundCards = cardsOfRound; queue = dir === 'smart' ? weightedShuffle(cardsOfRound) : shuffle(cardsOfRound); doneRound = 0; reviewing = review; };
   const nextRound = () => { startRound(chunk ? pool.slice(round * chunk, (round + 1) * chunk) : pool); round++; };
   nextRound();
   let done = 0, flipped = false;
-  const doneIds = new Set();
+  const doneIds = new Set(), reasked = new Set();
 
   // Typen: eerst zelf je antwoord typen, dan het modelantwoord met een check op de kernbegrippen
   let mode = await getSetting('practiceMode', 'flip');
@@ -925,8 +926,14 @@ export async function practiceView(root, scope, query = '') {
     draw();
   }
 
+  // Bovenaan de kaart; bij Slim ook hoe vaak deze richting al fout ging
+  function kindLabel(c, s, rev) {
+    const wrong = dir === 'smart' ? c.dirs?.[rev ? 'r' : 'n']?.wrong || 0 : 0;
+    return `${s ? esc(s.name) + ' · ' : ''}${rev ? 'Welk begrip is dit?' : c.kind === 'vraag' ? 'Oefenvraag' : c.kind === 'begrip' ? 'Begrip' : 'Kaart'}${wrong ? ` · <span class="weak-txt">${wrong}× fout in deze richting</span>` : ''}`;
+  }
+
   function typedView(c, s, rev) {
-    const kind = `${s ? esc(s.name) + ' · ' : ''}${rev ? 'Welk begrip is dit?' : c.kind === 'vraag' ? 'Oefenvraag' : c.kind === 'begrip' ? 'Begrip' : 'Kaart'}`;
+    const kind = kindLabel(c, s, rev);
     const prompt = rev ? `<div class="flash-front long md">${markdown(c.back)}</div>` : `<div class="flash-front">${esc(c.front)}</div>`;
     if (!flipped) return `
       <div class="flash typing">
@@ -1001,7 +1008,7 @@ export async function practiceView(root, scope, query = '') {
     }
     root.innerHTML = head + `
       <button class="flash ${flipped ? 'flipped' : ''}" data-a="flip">
-        <span class="flash-kind">${s ? esc(s.name) + ' · ' : ''}${rev ? 'Welk begrip is dit?' : c.kind === 'vraag' ? 'Oefenvraag' : c.kind === 'begrip' ? 'Begrip' : 'Kaart'}</span>
+        <span class="flash-kind">${kindLabel(c, s, rev)}</span>
         ${rev ? `<span class="flash-front long md">${markdown(c.back)}</span>` : `<span class="flash-front">${esc(c.front)}</span>`}
         ${flipped ? (rev ? `<span class="flash-back flash-answer">${esc(c.front)}</span>` : `<span class="flash-back md">${markdown(c.back)}</span>`) : '<span class="flash-hint">Tik om het antwoord te zien</span>'}
       </button>
@@ -1012,9 +1019,12 @@ export async function practiceView(root, scope, query = '') {
     const c = queue.shift();
     if (!cram || g === 0) c.srs = schedule(c.srs, g);
     c.last = { g, t: Date.now() }; // voor 'foute kaarten' en de voortgang per set
+    recordDir(c, reversed(c) ? 'r' : 'n', g); // per richting: begrip → uitleg (n) of uitleg → begrip (r)
     await db.put('cards', c);
     revOf.delete(c.id);
     if (g === 0) queue.splice(Math.min(3 + Math.floor(Math.random() * 4), queue.length), 0, c);
+    // Slim: Moeilijk komt later in deze ronde nog één keer terug (de richting wordt dan opnieuw gekozen)
+    else if (g === 1 && dir === 'smart' && !reasked.has(c.id)) { reasked.add(c.id); queue.splice(Math.min(5 + Math.floor(Math.random() * 4), queue.length), 0, c); }
     else { doneIds.add(c.id); done = doneIds.size; doneRound++; } // een ronde herhalen telt niet dubbel
     flipped = false;
     typed = '';

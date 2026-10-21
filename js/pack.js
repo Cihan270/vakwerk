@@ -109,8 +109,8 @@ export async function importPack(data) {
       ];
       cards.forEach((c, pos) => {
         const ex = exCards.get(c.id);
-        // pos: volgorde binnen de set (zo leer je samenhangende begrippen in dezelfde ronde); last: 'foute kaarten' blijven bewaard
-        out.cards.push({ ...c, subjectId, summaryId: null, deck: it.deck, deckOrder: order, pos, srs: ex?.srs || { ...newSrs(), due: now }, ...(ex?.last ? { last: ex.last } : {}), created: ex?.created || now });
+        // pos: volgorde binnen de set (zo leer je samenhangende begrippen in dezelfde ronde); last/dirs: 'foute kaarten' en Slim blijven bewaard
+        out.cards.push({ ...c, subjectId, summaryId: null, deck: it.deck, deckOrder: order, pos, srs: ex?.srs || { ...newSrs(), due: now }, ...(ex?.last ? { last: ex.last } : {}), ...(ex?.dirs ? { dirs: ex.dirs } : {}), created: ex?.created || now });
       });
       count.terms += terms.length;
       count.questions += questions.length;
@@ -130,7 +130,7 @@ export async function importPack(data) {
       ];
       for (const c of cards) {
         const ex = exCards.get(c.id);
-        out.cards.push({ ...c, subjectId, summaryId: id, srs: ex?.srs || { ...newSrs(), due: now }, created: ex?.created || now });
+        out.cards.push({ ...c, subjectId, summaryId: id, srs: ex?.srs || { ...newSrs(), due: now }, ...(ex?.last ? { last: ex.last } : {}), ...(ex?.dirs ? { dirs: ex.dirs } : {}), created: ex?.created || now });
       }
       count.terms += terms.length;
       count.questions += questions.length;

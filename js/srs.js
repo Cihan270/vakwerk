@@ -23,8 +23,46 @@ export function lastGrade(c) {
   if (c.srs?.lapses > 0) return 0;
   return null;
 }
-export const isWeak = c => { const g = lastGrade(c); return g !== null && g <= 1; };  // Opnieuw of Moeilijk
-export const isKnown = c => { const g = lastGrade(c); return g !== null && g >= 2; }; // Goed of Makkelijk
+// Een kaart is 'fout' als de laatste keer Opnieuw/Moeilijk was, in welke richting dan ook
+const weakDir = c => Object.values(c.dirs || {}).some(d => d.g <= 1);
+export const isWeak = c => { const g = lastGrade(c); return (g !== null && g <= 1) || weakDir(c); };  // Opnieuw of Moeilijk
+export const isKnown = c => { const g = lastGrade(c); return g !== null && g >= 2 && !weakDir(c); }; // Goed of Makkelijk
+
+// ---------- Slim oefenen: per richting bijhouden hoe goed je een kaart kent ----------
+// n = begrip → uitleg, r = uitleg → begrip. m = beheersing (0–1), weegt recente beurten zwaarder.
+export function recordDir(c, dir, g) {
+  const d = { seen: 0, wrong: 0, m: 0, ...(c.dirs?.[dir] || {}) };
+  const score = g >= 2 ? 1 : g === 1 ? 0.4 : 0;
+  d.m = d.seen ? d.m * 0.5 + score * 0.5 : score;
+  d.seen++;
+  if (g <= 1) d.wrong++;
+  d.g = g;
+  d.t = Date.now();
+  c.dirs = { ...(c.dirs || {}), [dir]: d };
+}
+export const mastery = (c, dir) => (c.dirs?.[dir]?.seen ? c.dirs[dir].m : null); // null = nog nooit gevraagd
+
+// Hoe zwak is een kaart (0 = beheerst … 1 = zwak)? De zwakste richting telt.
+export function weakness(c) {
+  const dirs = c.kind === 'vraag' ? ['n'] : ['n', 'r'];
+  return Math.max(...dirs.map(d => 1 - (mastery(c, d) ?? 0.3)));
+}
+
+// Welke richting vraag je nu? Nieuw: eerst begrip → uitleg; kent je die, dan ook omgekeerd;
+// daarna steeds de richting die je het slechtst kent (ongeveer gelijk: willekeurig).
+export function smartDir(c) {
+  if (c.kind === 'vraag') return 'n';
+  const n = mastery(c, 'n'), r = mastery(c, 'r');
+  if (n === null) return 'n';
+  if (r === null) return n >= 0.6 ? 'r' : 'n';
+  if (Math.abs(n - r) < 0.15) return Math.random() < 0.5 ? 'n' : 'r';
+  return n < r ? 'n' : 'r';
+}
+
+// Husselen, maar zwakke kaarten eerder: willekeur genoeg dat de volgorde elke keer anders is
+export function weightedShuffle(cards) {
+  return cards.map(c => [weakness(c) + Math.random() * 0.35, c]).sort((a, b) => b[0] - a[0]).map(x => x[1]);
+}
 
 // Sets: kaarten uit een pakket met `deck` (bijv. per college), anders per samenvatting, anders 'Eigen kaarten'
 export function deckKey(c) { return c.deck ? 'd:' + c.deck : c.summaryId ? 's:' + c.summaryId : 'eigen'; }
