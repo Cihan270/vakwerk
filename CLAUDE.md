@@ -65,6 +65,9 @@ Claude levert samenvattingen aan via een **pakketbestand** dat de gebruiker in d
 
 Een item met `deck` en zonder `summary` wordt alleen een set flitskaarten (geen samenvatting). In de app staat elke set
 onder Vak › Oefenen › **Per set leren**; "Alles door elkaar" oefent alle kaarten van het vak gehusseld.
+Een set wordt geleerd in rondes (instelling "Per ronde": 5, 10 of alles), in de volgorde van `terms` (opgeslagen als `pos`):
+zet samenhangende begrippen dus bij elkaar. Houd definities kort: een **vetgedrukte kernzin** plus `- ` opsomming
+(de kaart rendert Markdown). Tabellen uit de slides → per kenmerk een vergelijkkaart, bv. "Mechanistic vs organic · Decision-making".
 
 ```json
 { "id": "ot-flits-s3", "subject": "Organization Theory", "deck": "Sessie 3 · Systems & contingency theory", "order": 1,

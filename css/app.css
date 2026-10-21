@@ -393,6 +393,7 @@ mark.tc-miss { background: color-mix(in srgb, var(--warn) 24%, transparent); col
 @media (max-width: 700px) { .type-compare { grid-template-columns: 1fr; } }
 .practice-done { text-align: center; padding: 50px 20px; }
 .practice-done p { margin: 10px auto 24px; max-width: 420px; }
+.round-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
 
 /* ---------- Instellingen ---------- */
 .settings { max-width: 780px; }

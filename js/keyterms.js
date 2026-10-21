@@ -13,7 +13,7 @@ const NAME_SKIP = new Set(['E', 'Eg', 'Example', 'Examples', 'Advantage', 'Advan
   'Outside', 'Sample', 'Fordism', 'Fordist', 'Taylorist', 'Weberian', 'Marxists', 'Moon']);
 const WORD_RE = /[A-Za-zÀ-ÿ0-9]+(?:['’][A-Za-z]+)?/g;
 // Na deze tekens begint een zin of opsomming: een hoofdletter is daar geen naam
-const SENTENCE_START = /(^|[.:;!?→+−–\-)\n]\s*|\d\)\s*)$/;
+const SENTENCE_START = /(^|[.:;!?→+−–\-)\n]\s*|\d[.)]\s*)[*_]*$/; // ook na **vet** of een genummerd punt
 
 const lower = s => String(s).toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
 function core(w) {
@@ -44,7 +44,7 @@ export function alternatives(front) {
   let f = String(front).replace(/^Q:\s*/i, '');
   const alts = [];
   f = f.replace(/\(([^)]*)\)/g, (m, inner) => { if (/^[A-Z]{2,6}$/.test(inner.trim())) alts.push(inner.trim()); return ' '; });
-  f = f.split(':')[0];
+  f = f.split(/[:·]/)[0];
   for (const part of f.split(/\s+(?:\/|&|vs\.?|↔|–|-)\s+/i)) {
     const p = part.replace(/\s+/g, ' ').trim();
     const ws = sig(p);

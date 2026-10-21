@@ -1,5 +1,5 @@
 // Kleine hulpfuncties: DOM, datums, iconen, dialogen en meldingen.
-export const APP_VERSION = 'v16'; // gelijk houden met VERSION in sw.js
+export const APP_VERSION = 'v17'; // gelijk houden met VERSION in sw.js
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];

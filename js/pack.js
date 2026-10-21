@@ -107,10 +107,11 @@ export async function importPack(data) {
         ...terms.map(t => ({ id: `pk:${key}:t:${slug(t.term)}`, front: t.term, back: t.definition, kind: 'begrip' })),
         ...questions.map((q, i) => ({ id: `pk:${key}:q:${i}`, front: q.question, back: q.answer, kind: 'vraag' })),
       ];
-      for (const c of cards) {
+      cards.forEach((c, pos) => {
         const ex = exCards.get(c.id);
-        out.cards.push({ ...c, subjectId, summaryId: null, deck: it.deck, deckOrder: order, srs: ex?.srs || { ...newSrs(), due: now }, created: ex?.created || now });
-      }
+        // pos: volgorde binnen de set (zo leer je samenhangende begrippen in dezelfde ronde); last: 'foute kaarten' blijven bewaard
+        out.cards.push({ ...c, subjectId, summaryId: null, deck: it.deck, deckOrder: order, pos, srs: ex?.srs || { ...newSrs(), due: now }, ...(ex?.last ? { last: ex.last } : {}), created: ex?.created || now });
+      });
       count.terms += terms.length;
       count.questions += questions.length;
       count.decks = (count.decks || 0) + 1;

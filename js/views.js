@@ -474,7 +474,7 @@ export async function subjectView(root, id, tab = 'notities') {
   if (tab === 'notities') body = notesTab(notebooks.filter(n => n.kind !== 'summary'), 'note');
   if (tab === 'samenvattingen') body = summariesTab(summaries, notebooks.filter(n => n.kind === 'summary'));
   if (tab === 'opdrachten') body = tasksTab(tasks, s);
-  if (tab === 'oefenen') body = practiceTab(cards, s, summaries, await getSetting('practiceDir', 'normal'), await getSetting('practiceMode', 'flip'));
+  if (tab === 'oefenen') body = practiceTab(cards, s, summaries, await getSetting('practiceDir', 'normal'), await getSetting('practiceMode', 'flip'), +(await getSetting('practiceChunk', 5)));
   if (tab === 'planning') {
     const done = plan.filter(p => p.kind === 'study' && p.done).length, total = plan.filter(p => p.kind === 'study').length;
     body = `<div class="row gap wrap"><span class="muted">${done} van ${total} studieblokken af</span><button class="btn small" data-a="newblock">${icon('plus', 16)} Blok</button></div>
@@ -539,6 +539,7 @@ export async function subjectView(root, id, tab = 'notities') {
       case 'weak': return go(`#/oefenen/${id}?fout`);
       case 'dir': await setSetting('practiceDir', a.dataset.dir); return rerender();
       case 'mode': await setSetting('practiceMode', a.dataset.mode); return rerender();
+      case 'chunk': await setSetting('practiceChunk', +a.dataset.chunk); return rerender();
       case 'more': {
         const v = await menu(a, [
           { label: 'Vak bewerken', value: 'edit', icon: 'edit' },
@@ -609,6 +610,7 @@ const PRACTICE_MODES = [
   { v: 'flip', label: 'Tikken' },
   { v: 'type', label: 'Typen' },
 ];
+const PRACTICE_CHUNKS = [5, 10, 0]; // kaarten per ronde; 0 = alles in één keer
 
 // Tekst met gemarkeerde stukken (spans: { start, end, hit })
 function markText(text, spans) {
@@ -633,7 +635,7 @@ function markDom(el, terms) {
   }
 }
 
-function practiceTab(cards, s, summaries = [], dir = 'normal', mode = 'flip') {
+function practiceTab(cards, s, summaries = [], dir = 'normal', mode = 'flip', chunk = 5) {
   const due = cards.filter(c => isDue(c)).length;
   const fresh = cards.filter(isNew).length;
   const weak = cards.filter(isWeak).length;
@@ -647,6 +649,8 @@ function practiceTab(cards, s, summaries = [], dir = 'normal', mode = 'flip') {
       <div class="seg small">${PRACTICE_DIRS.map(d => `<button class="pill ${d.v === dir ? 'on' : ''}" data-a="dir" data-dir="${d.v}">${d.label}</button>`).join('')}</div>
       <span class="muted small">Antwoord:</span>
       <div class="seg small">${PRACTICE_MODES.map(m => `<button class="pill ${m.v === mode ? 'on' : ''}" data-a="mode" data-mode="${m.v}">${m.label}</button>`).join('')}</div>
+      <span class="muted small">Per ronde:</span>
+      <div class="seg small">${PRACTICE_CHUNKS.map(n => `<button class="pill ${n === chunk ? 'on' : ''}" data-a="chunk" data-chunk="${n}">${n || 'Alles'}</button>`).join('')}</div>
     </div>
     <div class="row gap wrap">
       <button class="btn primary" data-a="review" ${due ? '' : 'disabled'}>${icon('cards', 18)} Start herhalen</button>
@@ -670,7 +674,7 @@ function practiceTab(cards, s, summaries = [], dir = 'normal', mode = 'flip') {
     ${cards.length ? `<input class="input card-filter" type="search" placeholder="Zoek in kaarten…">
     <div class="card-list">${cards.sort((a, b) => a.front.localeCompare(b.front)).map(c => `<button class="card-row" data-card="${c.id}">
       <span class="tag ${c.kind === 'vraag' ? 'q' : c.kind === 'begrip' ? 'ai' : ''}">${c.kind === 'vraag' ? 'Vraag' : c.kind === 'begrip' ? 'Begrip' : 'Eigen'}</span>
-      <b>${esc(c.front)}</b><small>${esc(c.back)}</small>
+      <b>${esc(c.front)}</b><small>${esc(plainText(c.back))}</small>
       <em>${isWeak(c) ? '<span class="weak-txt">fout</span>' : isDue(c) ? 'nu' : fmtDate(c.srs.due)}</em>
     </button>`).join('')}</div>` : '<p class="empty">Nog geen kaarten. Begrippen en oefenvragen uit geïmporteerde samenvattingen worden automatisch flashcards. Je kunt ook zelf kaarten maken.</p>'}`;
 }
@@ -886,17 +890,30 @@ export async function practiceView(root, scope, query = '') {
     cards = cards.filter(c => { const k = c.front.trim().toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
   }
   // Herhalen: eerst de kaarten die het langst over tijd zijn; daarna altijd husselen, zodat de volgorde elke keer anders is
-  let queue = shuffle((cram ? cards : cards.filter(c => isDue(c)))
+  let pool = (cram ? cards : cards.filter(c => isDue(c)))
     .sort((a, b) => (isNew(a) - isNew(b)) || (a.srs?.due || 0) - (b.srs?.due || 0))
-    .slice(0, cram ? 300 : 60));
-  const total = queue.length;
+    .slice(0, cram ? 300 : 60);
+  // Rondes: een grote set leer je in stukjes van 5 of 10. Bij een set eerst wat je nog niet kent, en verder in de volgorde
+  // van de set (samenhangende begrippen in dezelfde ronde); binnen een ronde gehusseld. ?mix = de hele set door elkaar.
+  const chunk = q.has('mix') ? 0 : +(await getSetting('practiceChunk', 5));
+  const status = c => isWeak(c) ? 0 : isKnown(c) ? 2 : 1;
+  pool = setKey && chunk
+    ? pool.sort((a, b) => status(a) - status(b) || (a.deckOrder ?? 0) - (b.deckOrder ?? 0) || (a.pos ?? 999) - (b.pos ?? 999) || a.id.localeCompare(b.id))
+    : shuffle(pool);
+  const total = pool.length;
+  const rounds = chunk ? Math.max(1, Math.ceil(total / chunk)) : 1;
+  let round = 0, roundCards = [], doneRound = 0, reviewing = false, finished = false, queue = [];
+  const startRound = (cardsOfRound, review = false) => { roundCards = cardsOfRound; queue = shuffle(cardsOfRound); doneRound = 0; reviewing = review; };
+  const nextRound = () => { startRound(chunk ? pool.slice(round * chunk, (round + 1) * chunk) : pool); round++; };
+  nextRound();
   let done = 0, flipped = false;
+  const doneIds = new Set();
 
   // Typen: eerst zelf je antwoord typen, dan het modelantwoord met een check op de kernbegrippen
   let mode = await getSetting('practiceMode', 'flip');
   let typed = '', result = null;
   const vocabOf = new Map();
-  for (const sid of new Set(queue.map(c => c.subjectId))) vocabOf.set(sid, buildVocab(await db.by('cards', 'subjectId', sid)));
+  for (const sid of new Set(pool.map(c => c.subjectId))) vocabOf.set(sid, buildVocab(await db.by('cards', 'subjectId', sid)));
   const keysOf = new Map();
   const keyTerms = c => {
     if (!keysOf.has(c.id)) keysOf.set(c.id, keyTermsFor(c, vocabOf.get(c.subjectId) || []));
@@ -945,18 +962,35 @@ export async function practiceView(root, scope, query = '') {
 
   function draw() {
     const c = queue[0];
+    if (!c && rounds > 1 && !finished) {
+      // Tussenscherm na een ronde: door naar de volgende, deze nog eens, of alles tot nu toe door elkaar
+      const next = Math.min(chunk, total - round * chunk);
+      const msg = reviewing ? `Je hebt de kaarten van ronde 1–${round} door elkaar herhaald.` : `Je kent deze ${roundCards.length} kaarten. Nog ${total - round * chunk} te gaan.`;
+      root.innerHTML = `<div class="view practice"><header class="topbar sub"><div class="row"><button class="icon-btn" data-a="back">${icon('x')}</button><div><h1>${esc(title)}</h1><p class="muted">${done} / ${total}</p></div></div></header>
+        <div class="progress"><i style="width:${total ? done / total * 100 : 0}%"></i></div>
+        <div class="practice-done round-done"><div class="welcome-art">${icon('check', 44)}</div><h2>${reviewing ? 'Herhaling klaar' : `Ronde ${round} van ${rounds} klaar`}</h2>
+        <p class="muted">${msg}</p>
+        <div class="round-actions">
+          ${round < rounds ? `<button class="btn primary" data-a="nextround">Volgende ${next} kaarten</button>` : ''}
+          ${!reviewing ? `<button class="btn" data-a="againround">Deze ronde nog eens</button>` : ''}
+          ${round >= 2 && !reviewing ? `<button class="btn" data-a="cumul">Ronde 1–${round} door elkaar</button>` : ''}
+          ${round >= rounds ? `<button class="btn primary" data-a="finish">Klaar</button>` : `<button class="btn ghost" data-a="back">Stoppen</button>`}
+        </div></div></div>`;
+      return;
+    }
     if (!c) {
       root.innerHTML = `<div class="view practice"><header class="topbar sub"><div class="row"><button class="icon-btn" data-a="back">${icon('back')}</button><h1>${esc(title)}</h1></div></header>
         <div class="practice-done"><div class="welcome-art">${icon('check', 44)}</div><h2>${total ? 'Klaar!' : 'Niets te herhalen'}</h2>
         <p class="muted">${total ? `Je hebt ${done} kaart${done === 1 ? '' : 'en'} geoefend. ${weakOnly ? 'Kaarten die je nu Goed had, staan niet meer bij je foute kaarten.' : 'Moeilijke kaarten komen binnenkort terug, makkelijke pas later.'}` : weakOnly ? 'Je hebt geen foute kaarten meer. Goed bezig!' : 'Alle kaarten zijn up-to-date. Kom later terug of kies "Alles door elkaar".'}</p>
-        <button class="btn primary" data-a="back">Terug</button></div></div>`;
+        <div class="round-actions">${rounds > 1 && setKey ? `<button class="btn" data-a="mixall">Hele set door elkaar</button>` : ''}<button class="btn primary" data-a="back">Terug</button></div></div></div>`;
       return;
     }
     const s = subs[c.subjectId];
+    const counter = rounds > 1 ? (reviewing ? `Herhaling ronde 1–${round} · ${doneRound} / ${roundCards.length}` : `Ronde ${round} van ${rounds} · ${doneRound} / ${roundCards.length}`) : `${done} / ${total}`;
     const rev = reversed(c);
     const head = `
     <div class="view practice" style="--c:${s?.color || '#888'}">
-      <header class="topbar sub"><div class="row"><button class="icon-btn" data-a="back" aria-label="Stoppen">${icon('x')}</button><div><h1>${esc(title)}</h1><p class="muted">${done} / ${total}${cram ? ' · oefenmodus' : ''}</p></div></div>
+      <header class="topbar sub"><div class="row"><button class="icon-btn" data-a="back" aria-label="Stoppen">${icon('x')}</button><div><h1>${esc(title)}</h1><p class="muted">${counter}${cram && rounds === 1 ? ' · oefenmodus' : ''}</p></div></div>
         <div class="actions"><div class="seg small">${PRACTICE_MODES.map(m => `<button class="pill ${m.v === mode ? 'on' : ''}" data-a="mode" data-mode="${m.v}">${m.label}</button>`).join('')}</div></div></header>
       <div class="progress"><i style="width:${total ? done / total * 100 : 0}%"></i></div>`;
     if (mode === 'type') {
@@ -981,7 +1015,7 @@ export async function practiceView(root, scope, query = '') {
     await db.put('cards', c);
     revOf.delete(c.id);
     if (g === 0) queue.splice(Math.min(3 + Math.floor(Math.random() * 4), queue.length), 0, c);
-    else done++;
+    else { doneIds.add(c.id); done = doneIds.size; doneRound++; } // een ronde herhalen telt niet dubbel
     flipped = false;
     typed = '';
     result = null;
@@ -996,6 +1030,11 @@ export async function practiceView(root, scope, query = '') {
     if (a === 'back') go(back);
     if (a === 'flip' && !flipped) { flipped = true; draw(); }
     if (a === 'check' && queue[0]) check(queue[0], reversed(queue[0]));
+    if (a === 'nextround') { nextRound(); draw(); }
+    if (a === 'againround') { startRound(roundCards); draw(); }
+    if (a === 'cumul') { startRound(pool.slice(0, round * chunk), true); draw(); }
+    if (a === 'finish') { finished = true; draw(); }
+    if (a === 'mixall') go(`#/oefenen/${scope}?set=${encodeURIComponent(setKey)}&mix`);
     if (a === 'mode' && el.dataset.mode !== mode) {
       mode = el.dataset.mode;
       await setSetting('practiceMode', mode);
