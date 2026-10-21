@@ -526,6 +526,12 @@ export async function subjectView(root, id, tab = 'notities') {
       case 'newtyped': { const r = await editSummary({ subjectId: id }); if (r) go('#/samenvatting/' + r.id); return; }
       case 'newtask': if (await editTask({ subjectId: id })) rerender(); return;
       case 'newcard': if (await editCard({ subjectId: id })) rerender(); return;
+      case 'delcards': {
+        if (!await confirmDialog(`Alle ${cards.length} flitskaarten van "${s.name}" verwijderen, ook je voortgang en eigen kaarten? Samenvattingen blijven staan. Een pakket kun je daarna opnieuw importeren.`, { ok: 'Alles verwijderen', title: 'Alle flitskaarten verwijderen' })) return;
+        await db.delMany('cards', cards.map(c => c.id));
+        toast(`${cards.length} flitskaarten verwijderd`);
+        return rerender();
+      }
       case 'review': return go('#/oefenen/' + id);
       case 'cram': return go('#/oefenen/' + id + '?alles');
       case 'set': return go(`#/oefenen/${id}?set=${encodeURIComponent(a.dataset.set)}`);
@@ -647,6 +653,7 @@ function practiceTab(cards, s, summaries = [], dir = 'normal', mode = 'flip') {
       <button class="btn" data-a="cram" ${cards.length ? '' : 'disabled'}>Alles door elkaar</button>
       <button class="btn ${weak ? 'weak-btn' : ''}" data-a="weak" ${weak ? '' : 'disabled'}>Foute kaarten${weak ? ` (${weak})` : ''}</button>
       <button class="btn ghost" data-a="newcard">${icon('plus', 18)} Kaart maken</button>
+      ${cards.length ? `<button class="btn ghost danger" data-a="delcards">${icon('trash', 18)} Alle kaarten verwijderen</button>` : ''}
     </div>
     ${cards.length ? `<h3 class="sec-title">Per set leren</h3>
     <div class="deck-list">${sets.map(d => {
