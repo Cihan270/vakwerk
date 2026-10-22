@@ -4,6 +4,7 @@ import { toast, closePopovers } from './util.js';
 import { dashboard, subjectView, summaryView, practiceView, settingsView, planningView } from './views.js';
 import { openEditor } from './editor.js';
 import { catchUp } from './planner.js';
+import { autoDone } from './plansets.js';
 import { checkInbox, connectInbox } from './inbox.js';
 
 const app = document.getElementById('app');
@@ -24,7 +25,12 @@ async function route() {
   window.scrollTo(0, 0);
   try {
     // Wat gisteren niet af kwam, schuift door voordat het dashboard/de planning getoond wordt
-    if ([undefined, 'planning', 'vak'].includes(parts[0])) await catchUp().catch(e => console.warn('inhalen mislukt', e));
+    if ([undefined, 'planning', 'vak'].includes(parts[0])) {
+      // Eerst afvinken wat je via de flitskaarten al beheerst, dan pas doorschuiven wat nog openstaat
+      const n = await autoDone().catch(e => { console.warn('afvinken mislukt', e); return 0; });
+      if (n) toast(`${n} studieblok${n > 1 ? 'ken' : ''} vanzelf afgevinkt: je beheerst de flitskaartset`);
+      await catchUp().catch(e => console.warn('inhalen mislukt', e));
+    }
     if (my !== seq) return;
     switch (parts[0]) {
       case undefined: await dashboard(app); break;

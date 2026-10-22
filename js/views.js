@@ -10,7 +10,9 @@ import { GRADES, schedule, isDue, isNew, intervalLabel, newSrs, shuffle, deckKey
 import { buildVocab, keyTermsFor, checkAnswer, checkTerm, findSpans, answerSpans } from './keyterms.js';
 import { importFile, exportBackup, seedDemo, removeDemo, wipeAll, isDemoSubject } from './pack.js';
 import { PAPERS } from './ink.js';
-import { shiftBlock, undoShift } from './planner.js';
+import { shiftBlock, shiftDay, undoShift } from './planner.js';
+import { enablePlanMove } from './planmove.js';
+import { planLinks, subjectSets, setForBlock } from './plansets.js';
 import { importPdf } from './pdf.js';
 import { connectInbox, checkInbox, disconnectInbox } from './inbox.js';
 
@@ -34,11 +36,11 @@ const PLAN_KINDS = [
 const kindLabel = k => PLAN_KINDS.find(x => x.id === k)?.label || '';
 const daysUntil = iso => Math.round((parseDay(iso) - parseDay(isoDay())) / 864e5);
 
-function planBlock(p, s) {
+function planBlock(p, s, set = null) {
   const checkable = p.kind === 'study';
   const color = p.kind === 'exam' ? 'var(--danger)' : p.kind === 'rest' ? 'var(--muted)' : (s?.color || 'var(--accent)');
   const tag = p.kind === 'study' ? (s?.name || '') : kindLabel(p.kind);
-  return `<div class="pblk k-${p.kind} ${p.done ? 'done' : ''}" style="--c:${color}">
+  return `<div class="pblk k-${p.kind} ${p.done ? 'done' : ''}" style="--c:${color}" data-pid="${p.id}">
     ${checkable ? `<button class="check ${p.done ? 'on' : ''}" data-pdone="${p.id}" aria-label="Afvinken">${p.done ? icon('check', 14) : ''}</button>`
       : `<span class="pk-ic">${icon(p.kind === 'exam' ? 'flag' : p.kind === 'class' ? 'calendar' : 'clock', 16)}</span>`}
     <button class="pblk-body" data-plan="${p.id}">
@@ -47,6 +49,7 @@ function planBlock(p, s) {
       ${p.details ? `<small>${esc(p.details)}</small>` : ''}
       ${p.important ? `<small class="imp"><i>★</i> Belangrijk: ${esc(p.important)}</small>` : ''}
     </button>
+    ${set ? `<button class="pset" data-pset="${esc(p.subjectId)}" data-set="${esc(set.key)}">${icon('cards', 14)} Oefen: <b>${esc(set.label.split(' · ')[0])}</b> <span>${Math.round(set.pct * 100)}% goed</span>${p.autoDone ? ' · vanzelf afgevinkt' : ''}</button>` : ''}
   </div>`;
 }
 
@@ -58,13 +61,16 @@ function examCards(D) {
     const s = D.sub[e.subjectId];
     const blocks = D.plan.filter(p => p.kind === 'study' && p.subjectId && p.subjectId === e.subjectId);
     const done = blocks.filter(p => p.done).length;
+    // Achter = niet af en oorspronkelijk gepland vóór vandaag (automatisch doorgeschoven)
+    const behind = blocks.filter(p => !p.done && p.movedFrom && p.movedFrom < today).length;
     const n = daysUntil(e.date);
     const pct = blocks.length ? Math.round(done / blocks.length * 100) : 0;
     return `<button class="exam-card" style="--c:${s?.color || 'var(--danger)'}" data-planfilter="${e.subjectId || ''}">
       <span class="exam-when">${n === 0 ? 'Vandaag' : n === 1 ? 'Morgen' : `Nog ${n} dagen`}</span>
       <b>${esc(s?.name || e.title)}</b>
       <small>${fmtDate(e.date)}${(() => { const tm = e.title.match(/\d{1,2}:\d{2}\s*[–-]\s*\d{1,2}:\d{2}/); return tm ? ' · ' + tm[0] : ''; })()}${e.details ? ' · ' + esc(e.details) : ''}</small>
-      ${blocks.length ? `<span class="bar"><i style="width:${pct}%"></i></span><small>${done} van ${blocks.length} blokken af</small>` : ''}
+      ${blocks.length ? `<span class="bar"><i style="width:${pct}%"></i></span><small>${done} van ${blocks.length} blokken af</small>
+        <small class="${behind ? 'behind' : 'ontrack'}">${behind ? `⚠ ${behind} blok${behind === 1 ? '' : 'ken'} achter` : '✓ Op schema'}</small>` : ''}
     </button>`;
   }).join('')}</div>`;
 }
@@ -74,6 +80,7 @@ function planDays(D, { subjectId = null, from = null } = {}) {
   let list = D.plan.filter(p => !subjectId || p.subjectId === subjectId || (p.kind === 'exam' && p.subjectId === subjectId));
   if (from) list = list.filter(p => p.date >= from);
   if (!list.length) return '<p class="empty">Nog geen planning.</p>';
+  const links = D.cards ? planLinks(D) : new Map();
   const byDate = new Map();
   for (const p of list) { if (!byDate.has(p.date)) byDate.set(p.date, []); byDate.get(p.date).push(p); }
   let html = '', curWeek = '';
@@ -82,9 +89,15 @@ function planDays(D, { subjectId = null, from = null } = {}) {
     const mon = new Date(d); mon.setDate(d.getDate() - (weekday(d) - 1));
     const wk = isoDay(mon);
     if (wk !== curWeek) { curWeek = wk; html += `<h3 class="week-title">Week van ${mon.getDate()} ${MONTHS[mon.getMonth()]}</h3>`; }
-    const cells = [0, 1, 2].map(slot => items.filter(p => p.slot === slot).map(p => planBlock(p, D.sub[p.subjectId])).join('') || (subjectId ? '' : '<div class="pblk empty-slot"></div>'));
+    // Elk dagdeel is een vakje (data-date/data-slot): daar kun je een blok naartoe slepen of tikken
+    const cells = [0, 1, 2].map(slot => {
+      const blocks = items.filter(p => p.slot === slot).map(p => planBlock(p, D.sub[p.subjectId], links.get(p.id))).join('');
+      return `<div class="pcell ${blocks ? '' : 'is-empty'}" data-date="${date}" data-slot="${slot}">${blocks || `<div class="pblk empty-slot" data-label="${SLOTS[slot]}"></div>`}</div>`;
+    });
+    const canShift = date >= today && items.some(p => p.kind === 'study' && !p.done);
     html += `<div class="pday ${date < today ? 'past' : ''} ${date === today ? 'is-today' : ''}" ${date === today ? 'id="vandaag"' : ''}>
-      <div class="pdate"><b>${d.getDate()}</b><small>${DAYS_SHORT[weekday(d) - 1]} ${MONTHS_SHORT[d.getMonth()]}</small>${date === today ? '<span class="tag now-tag">Vandaag</span>' : ''}</div>
+      <div class="pdate"><b>${d.getDate()}</b><small>${DAYS_SHORT[weekday(d) - 1]} ${MONTHS_SHORT[d.getMonth()]}</small>${date === today ? '<span class="tag now-tag">Vandaag</span>' : ''}
+        ${canShift ? `<button class="shift-day" data-shiftday="${date}" title="Deze dag lukt niet: alle studieblokken doorschuiven">↻ Lukt niet</button>` : ''}</div>
       <div class="pblocks ${subjectId ? 'stack' : ''}">${cells.join('')}</div>
     </div>`;
   }
@@ -98,8 +111,10 @@ async function togglePlan(id) {
 }
 
 async function editPlanItem(p) {
-  const subjects = await db.all('subjects');
+  const [subjects, cards, summaries] = await Promise.all(['subjects', 'cards', 'summaries'].map(s => db.all(s)));
   const isEdit = !!p?.id;
+  const sets = p?.subjectId ? subjectSets(cards, summaries, p.subjectId) : [];
+  const auto = p?.id ? setForBlock({ ...p, deck: undefined }, sets) : null;
   const r = await modal({
     title: isEdit ? 'Planningsblok' : 'Nieuw blok',
     body: `<label class="field"><span>Wat ga je doen?</span><input name="title" value="${esc(p?.title || '')}" required autocomplete="off"></label>
@@ -112,6 +127,10 @@ async function editPlanItem(p) {
         <label class="field"><span>Soort</span><select name="kind">${PLAN_KINDS.map(k => `<option value="${k.id}" ${k.id === (p?.kind || 'study') ? 'selected' : ''}>${k.label}</option>`).join('')}</select></label>
       </div>
       <label class="field"><span>Details</span><textarea name="details" rows="4">${esc(p?.details || '')}</textarea></label>
+      ${sets.length ? `<label class="field"><span>Flitskaartset</span><select name="deck">
+        <option value="" ${!p?.deck ? 'selected' : ''}>Automatisch${auto ? ` (${esc(auto.label.split(' · ')[0])})` : ' (geen gevonden)'}</option>
+        ${sets.map(x => `<option value="${esc(x.label)}" ${p?.deck === x.label ? 'selected' : ''}>${esc(x.label)}</option>`).join('')}
+        <option value="-" ${p?.deck === '-' ? 'selected' : ''}>Geen</option></select></label>` : ''}
       ${p?.important ? `<p class="muted small">★ Belangrijk: ${esc(p.important)}</p>` : ''}
       ${p?.movedFrom ? `<p class="muted small">↻ Doorgeschoven, oorspronkelijk gepland op ${esc(fmtDate(p.movedFrom))}</p>` : ''}`,
     actions: isEdit ? [
@@ -123,7 +142,8 @@ async function editPlanItem(p) {
   if (r.action === 'del') { await db.del('plan', p.id); return true; }
   if (r.action === 'shift') return !!(await shiftBlock(p.id));
   if (r.action !== 'ok') return false;
-  await db.put('plan', { done: false, important: '', source: 'eigen', ...(p || {}), id: p?.id || uid('b'), title: r.data.title.trim(), date: r.data.date, slot: +r.data.slot, subjectId: r.data.subjectId || null, kind: r.data.kind, details: r.data.details });
+  const deck = r.data.deck || undefined; // leeg = automatisch zoeken
+  await db.put('plan', { done: false, important: '', source: 'eigen', ...(p || {}), id: p?.id || uid('b'), title: r.data.title.trim(), date: r.data.date, slot: +r.data.slot, subjectId: r.data.subjectId || null, kind: r.data.kind, details: r.data.details, deck });
   return true;
 }
 
@@ -131,6 +151,16 @@ async function editPlanItem(p) {
 async function handlePlanClick(t, rerender) {
   const pd = t.closest('[data-pdone]');
   if (pd) { await togglePlan(pd.dataset.pdone); rerender(); return true; }
+  const ps = t.closest('[data-pset]');
+  if (ps) { go(`#/oefenen/${ps.dataset.pset}?set=${encodeURIComponent(ps.dataset.set)}`); return true; }
+  const sd = t.closest('[data-shiftday]');
+  if (sd) {
+    const day = sd.dataset.shiftday;
+    if (await confirmDialog(`Alle studieblokken van ${fmtDate(day)} die nog niet af zijn doorschuiven naar de eerstvolgende vrije momenten vóór het tentamen?`, { ok: 'Doorschuiven', danger: false, title: 'Deze dag lukt niet' })) {
+      if (await shiftDay(day)) rerender();
+    }
+    return true;
+  }
   const pb = t.closest('[data-plan]');
   if (pb) { if (await editPlanItem(await db.get('plan', pb.dataset.plan))) rerender(); return true; }
   return false;
@@ -149,6 +179,7 @@ export async function planningView(root, subjectId = null) {
         <div><h1>${esc(meta?.title || 'Planning')}</h1><p class="muted">${D.plan.filter(p => p.kind === 'study' && p.done).length} van ${D.plan.filter(p => p.kind === 'study').length} studieblokken af</p></div></div>
       <div class="actions"><button class="btn" data-a="addblock">${icon('plus', 18)} Blok</button></div>
     </header>
+    <p class="muted small plan-hint">Tip: houd een blok ingedrukt om het te verslepen of te verwijderen.</p>
     ${undoInfo && undoInfo.date === isoDay() ? `<div class="shift-banner"><b>↻</b><span>${undoInfo.label === 'manual' ? 'Je hebt een blok doorgeschoven' : 'Blokken die nog niet af waren zijn doorgeschoven'} — ${undoInfo.moved} blok${undoInfo.moved === 1 ? '' : 'ken'} kregen een nieuwe plek vóór het tentamen.</span><button class="btn small" data-a="undoshift">Ongedaan maken</button></div>` : ''}
     ${examCards(D)}
     ${meta?.notes?.length ? `<details class="card plan-notes"><summary><b>Let op</b> <span class="muted">(${meta.notes.length})</span></summary><ul>${meta.notes.map(n => `<li>${markdown(n).replace(/^<p>|<\/p>$/g, '')}</li>`).join('')}</ul></details>` : ''}
@@ -168,6 +199,7 @@ export async function planningView(root, subjectId = null) {
     if (a === 'addblock') { if (await editPlanItem({ subjectId })) rerender(); }
     if (a === 'undoshift') { if (await undoShift()) rerender(); }
   };
+  enablePlanMove(root, { onChange: rerender, slots: SLOTS });
   const t = $('#vandaag', root);
   if (t) requestAnimationFrame(() => { t.scrollIntoView({ block: 'start' }); scrollBy(0, -12); });
 }
@@ -282,7 +314,7 @@ export async function dashboard(root) {
       </section>`;
   const planCard = todayPlan.length || nextPlan ? `<section class="card">
           <div class="card-h"><h3>${icon('list', 18)} ${todayPlan.length ? 'Vandaag studeren' : 'Planning'}</h3><a class="link" href="#/planning">Hele planning →</a></div>
-          ${todayPlan.length ? `<div class="pblocks stack">${todayPlan.map(p => planBlock(p, D.sub[p.subjectId])).join('')}</div>`
+          ${todayPlan.length ? `<div class="pblocks stack">${(() => { const links = planLinks(D); return todayPlan.map(p => planBlock(p, D.sub[p.subjectId], links.get(p.id))).join(''); })()}</div>`
             : `<p class="empty small">Vandaag niets gepland. Volgende: <b>${fmtDate(nextPlan.date)}</b> — ${esc(nextPlan.title)}</p>`}
         </section>` : '';
   const study = [...D.summaries].sort((a, b) => (a.read - b.read) || (b.date || '').localeCompare(a.date || '') || b.updated - a.updated).slice(0, 4);
@@ -478,7 +510,7 @@ export async function subjectView(root, id, tab = 'notities') {
   if (tab === 'planning') {
     const done = plan.filter(p => p.kind === 'study' && p.done).length, total = plan.filter(p => p.kind === 'study').length;
     body = `<div class="row gap wrap"><span class="muted">${done} van ${total} studieblokken af</span><button class="btn small" data-a="newblock">${icon('plus', 16)} Blok</button></div>
-      <div class="plan-list">${planDays({ plan, sub: { [id]: s } }, { subjectId: id })}</div>`;
+      <div class="plan-list">${planDays({ plan, sub: { [id]: s }, cards, summaries }, { subjectId: id })}</div>`;
   }
 
   root.innerHTML = `

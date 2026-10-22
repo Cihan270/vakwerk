@@ -303,6 +303,32 @@ button:disabled { opacity: .4; cursor: default; }
 .pblk.done { opacity: .65; }
 @media (max-width: 760px) { .pblocks { grid-template-columns: 1fr; } .pblk.empty-slot { display: none; } .pday { grid-template-columns: 1fr; gap: 6px; } .pdate { display: flex; gap: 8px; align-items: baseline; } }
 
+/* Planning: dagdelen, slepen, set-knop, doorschuiven, achter op schema */
+.pcell { display: flex; flex-direction: column; gap: 8px; min-width: 0; border-radius: 12px; }
+.pblocks.stack .pcell.is-empty { display: none; }
+@media (max-width: 760px) { .pcell.is-empty { display: none; } }
+.pblk[data-pid] { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; flex-wrap: wrap; transition: box-shadow .15s, transform .15s; }
+.pblk.selected { box-shadow: 0 0 0 3px var(--accent); transform: scale(1.02); }
+.pblk.dragging { opacity: .35; }
+.plan-ghost { position: fixed; left: 0; top: 0; z-index: 1000; pointer-events: none; opacity: .95; box-shadow: 0 12px 34px rgba(0, 0, 0, .25); }
+body.plan-moving .pcell.is-empty { display: flex; }
+body.plan-moving .pblk.empty-slot { display: flex; min-height: 46px; border: 2px dashed var(--line); align-items: center; justify-content: center; }
+body.plan-moving .pblk.empty-slot::after { content: attr(data-label); color: var(--muted); font-size: 13px; font-weight: 600; }
+.pcell.drop-over { outline: 3px dashed var(--accent); outline-offset: 2px; background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.move-bar {
+  position: fixed; left: 50%; bottom: calc(18px + var(--safe-b)); transform: translateX(-50%); z-index: 900; display: flex; align-items: center; gap: 10px;
+  background: var(--surface); border-radius: 16px; padding: 10px 12px 10px 16px; box-shadow: 0 10px 40px rgba(0, 0, 0, .22); max-width: calc(100vw - 32px); flex-wrap: wrap; font-size: 14px;
+}
+.plan-hint { margin: -6px 0 12px; }
+.pset { flex-basis: 100%; margin-left: 34px; text-align: left; font-size: 12.5px; font-weight: 650; color: var(--c); display: inline-flex; align-items: center; gap: 5px; padding: 2px 0; }
+.pset b { white-space: nowrap; }
+.pblk.done .pset b { text-decoration: none; }
+.pset span { color: var(--muted); font-weight: 500; white-space: nowrap; }
+.shift-day { margin-top: 6px; font-size: 12px; font-weight: 650; color: var(--muted); padding: 3px 8px; border-radius: 999px; background: var(--surface-2); white-space: nowrap; }
+@media (max-width: 760px) { .shift-day { margin: 0 0 0 auto; } }
+.exam-card .behind { color: var(--danger); font-weight: 650; }
+.exam-card .ontrack { color: var(--ok); font-weight: 600; }
+
 /* ---------- Lezen ---------- */
 .reader .tabs .tab.on { border-color: var(--c); }
 .sources { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; margin: -8px 0 16px; }

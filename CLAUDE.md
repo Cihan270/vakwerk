@@ -77,6 +77,12 @@ zet samenhangende begrippen dus bij elkaar. Houd definities kort: een **vetgedru
 - Optioneel `subjects: [{ name, color, aliases }]` bovenaan het pakket: die vakken worden zonder vraag aangemaakt (of hun Canvas-namen aangevuld).
 - **Inhalen** (`js/planner.js`): niet-afgevinkte studieblokken van eerdere dagen schuiven bij het openen van de app door naar de volgende momenten van hetzelfde vak, vóór dat vak's tentamen; "Vrij"-blokken worden opgeofferd (dag vóór een tentamen als laatste). Doorgeschoven items krijgen `movedFrom`; een nieuwe import laat die plek staan.
 - **Planning vervangen**: `replacePlan: [{ "subject": "Calculus A", "from": "2026-10-19" }]` haalt (na bevestiging) de niet-afgevinkte studieblokken van dat vak vanaf die datum weg, ook doorgeschoven blokken. Gebruik dan nieuwe `id`'s voor de nieuwe blokken.
+- **Flitskaartset bij een blok** (`js/plansets.js`): optioneel `deck` = naam van de set (`"-"` = geen). Zonder `deck` zoekt de app
+  er zelf een, eerst op sessienummer in titel/details ("slides sessie 3" ↔ "Sessie 3 · …"), dan op woorden. Een blok van vandaag
+  of eerder wordt vanzelf afgevinkt (`autoDone`) zodra die set voor 80% 'goed' is.
+- **Zelf verplaatst** (blok ingedrukt houden → slepen of op een dagdeel tikken, `js/planmove.js`) krijgt `pinned: true`;
+  een nieuwe import laat die plek staan. "↻ Lukt niet" bij een dag schuift alle open studieblokken van die dag door.
+- **Achter op schema** (tentamenkaart) = niet af en `movedFrom` ligt vóór vandaag.
 - `slot`: 0 = ochtend, 1 = middag, 2 = avond. `kind`: `study` (afvinkbaar), `class`, `exam` (geeft een aftelkaart op het dashboard), `rest`.
 - Persoonlijke planningen horen in OneDrive, **niet** in deze (publieke) repo. Lokaal testen kan via `.local-test/` (staat in .gitignore).
 

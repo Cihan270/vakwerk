@@ -122,6 +122,19 @@ export async function shiftBlock(id) {
   return res;
 }
 
+// "Deze dag lukt niet": alle studieblokken van die dag die nog niet af zijn, schuiven door (vanaf de dag erna)
+export async function shiftDay(date) {
+  const plan = await db.all('plan');
+  const ids = plan.filter(p => p.date === date && p.kind === 'study' && !p.done).map(p => p.id);
+  if (!ids.length) return null;
+  const today = isoDay();
+  const res = reschedule(plan, today, { force: new Set(ids), start: addDays(date > today ? date : today, 1) });
+  if (!res || !res.moved) { toast('Er is geen ruimte meer om deze dag door te schuiven'); return null; }
+  await apply(plan, res, 'manual');
+  toast(`${ids.length} blok${ids.length > 1 ? 'ken' : ''} doorgeschoven${res.overflow ? ' — past net niet meer, staat er nu extra bij' : ''}`);
+  return res;
+}
+
 export async function undoShift() {
   const u = await getSetting('planUndo', null);
   if (!u) return false;

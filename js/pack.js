@@ -151,12 +151,13 @@ export async function importPack(data) {
     const subjectId = p.subject ? (mapping[p.subject] || findSubject(subjects, p.subject)?.id || null) : null;
     const id = 'pk:' + (p.id || `${p.date}-${p.slot ?? 0}-${slug(p.title)}`);
     const ex = exPlan.get(id);
-    // Al doorgeschoven? Dan blijft de nieuwe plek staan.
-    const keepPos = ex?.movedFrom;
+    // Al doorgeschoven of zelf verplaatst (pinned)? Dan blijft de nieuwe plek staan. Een zelf gekozen flitskaartset ook.
+    const keepPos = ex?.movedFrom || ex?.pinned;
     out.plan.push({
       id, subjectId, date: keepPos ? ex.date : p.date, slot: keepPos ? ex.slot : Math.min(2, Math.max(0, +p.slot || 0)), kind: p.kind || 'study',
       title: p.title, details: p.details || '', important: p.important || '', done: ex?.done || false, source: 'claude',
-      ...(keepPos ? { movedFrom: ex.movedFrom } : {}), ...(ex?.keep ? { keep: true } : {}),
+      ...(ex?.movedFrom ? { movedFrom: ex.movedFrom } : {}), ...(ex?.pinned ? { pinned: true } : {}), ...(ex?.keep ? { keep: true } : {}),
+      ...(ex?.deck !== undefined ? { deck: ex.deck } : p.deck ? { deck: p.deck } : {}),
     });
     count.plan++;
   }
