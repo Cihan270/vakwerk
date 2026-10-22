@@ -1039,23 +1039,44 @@ export async function practiceView(root, scope, query = '') {
     const dpr = Math.min(devicePixelRatio || 1, 2);
     const size = () => { const r = pad.getBoundingClientRect(); cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr); cv.style.width = r.width + 'px'; cv.style.height = r.height + 'px'; };
     const ctx = cv.getContext('2d');
-    let cur = null, raf = 0;
+    // Klaar geschreven lijnen staan in een buffer; per frame tekenen we alleen die buffer + de lijn die je nu schrijft
+    const baked = document.createElement('canvas');
+    const bake = () => {
+      baked.width = cv.width; baked.height = cv.height;
+      const b = baked.getContext('2d');
+      b.setTransform(dpr, 0, 0, dpr, 0, 0);
+      for (const st of inkStrokes) drawStroke(b, st);
+    };
+    let cur = null, raf = 0, rect = null;
     const repaint = () => {
       raf = 0;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, cv.width, cv.height);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      for (const st of cur ? [...inkStrokes, cur] : inkStrokes) drawStroke(ctx, st);
+      ctx.drawImage(baked, 0, 0);
+      if (cur) { ctx.setTransform(dpr, 0, 0, dpr, 0, 0); drawStroke(ctx, cur); }
     };
     const soon = () => { if (!raf) raf = requestAnimationFrame(repaint); };
-    size(); repaint();
-    pad.repaint = repaint;
-    const pt = e => { const r = cv.getBoundingClientRect(); return [Math.round((e.clientX - r.left) * 10) / 10, Math.round((e.clientY - r.top) * 10) / 10, e.pointerType === 'pen' ? Math.round((e.pressure || 0.4) * 100) / 100 : 0.5]; };
+    size(); bake(); repaint();
+    pad.repaint = () => { bake(); repaint(); };
+    // Positie van het vak één keer per lijn opvragen (niet per punt: dat remt de Pencil af)
+    const pt = e => [Math.round((e.clientX - rect.left) * 10) / 10, Math.round((e.clientY - rect.top) * 10) / 10, e.pointerType === 'pen' ? Math.round((e.pressure || 0.4) * 100) / 100 : 0.5];
+    // Krabbel (handschrift → tekst) en scrollen mogen de Pencil-lijn niet onderbreken:
+    // touch-events van de Pencil, en elke touchmove terwijl je schrijft, worden geblokkeerd (zoals in de notitie-editor)
+    const stylus = e => [...e.touches].some(t => t.touchType === 'stylus');
+    const block = e => { if (stylus(e) || cur) e.preventDefault(); };
+    cv.addEventListener('touchstart', block, { passive: false });
+    cv.addEventListener('touchmove', block, { passive: false });
+    const docBlock = e => {
+      if (!cv.isConnected) return document.removeEventListener('touchmove', docBlock);
+      if (cur) e.preventDefault(); // hand naast het vak: pagina niet laten scrollen, anders breekt iOS je lijn af
+    };
+    document.addEventListener('touchmove', docBlock, { passive: false });
     cv.addEventListener('pointerdown', e => {
       if (e.pointerType === 'pen') penSeen = true;
       else if (e.pointerType === 'touch' && penSeen) return; // handpalm of vinger na de Pencil: niet tekenen
       e.preventDefault();
       try { cv.setPointerCapture(e.pointerId); } catch {}
+      rect = cv.getBoundingClientRect();
       cur = { id: e.pointerId, tool: 'pen', c: color, w: e.pointerType === 'pen' ? 2.4 : 2.6, p: pt(e) };
       pad.classList.add('used');
       soon();
@@ -1070,8 +1091,8 @@ export async function practiceView(root, scope, query = '') {
     const end = e => {
       if (!cur || e.pointerId !== cur.id) return;
       const { id, ...st } = cur;
-      if (st.p.length) inkStrokes.push(st);
       cur = null;
+      if (st.p.length) { inkStrokes.push(st); const b = baked.getContext('2d'); b.setTransform(dpr, 0, 0, dpr, 0, 0); drawStroke(b, st); }
       soon();
     };
     cv.addEventListener('pointerup', end);
