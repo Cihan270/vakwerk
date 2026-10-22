@@ -376,6 +376,8 @@ body.plan-moving .pblk.empty-slot::after { content: attr(data-label); color: var
 .flash-front { font-size: 26px; font-weight: 650; line-height: 1.3; }
 .flash-front.long { font-size: 19px; font-weight: 500; line-height: 1.45; text-align: left; width: 100%; }
 .flash-front.long p { margin: 0 0 .5em; }
+.flash-front.case-front { font-weight: 550; }
+.case-tag { background: var(--warn); color: #fff; border-radius: 6px; padding: 1px 7px; margin-right: 4px; letter-spacing: .06em; }
 .flash-answer { font-size: 24px; font-weight: 700; text-align: center; color: var(--c, var(--accent)); }
 .flash-back { font-size: 18px; border-top: 1px solid var(--line); padding-top: 18px; width: 100%; text-align: left; }
 .flash-hint { color: var(--muted); font-size: 14px; }

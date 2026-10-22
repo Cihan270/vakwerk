@@ -13,11 +13,12 @@ Claude levert samenvattingen aan via een **pakketbestand** dat de gebruiker in d
    - `terms`: begrippenlijst (term + korte uitleg) → worden automatisch flashcards.
    - `questions`: tentamenachtige oefenvragen met uitgewerkt antwoord → ook flashcards.
    - `assignments`: openstaande Canvas-opdrachten van dat vak met deadline (optioneel).
-5. Schrijf het pakket naar `C:\Users\Remzi\OneDrive\Vakwerk\vakwerk-YYYY-MM-DD.json` (map aanmaken als die niet bestaat).
+5. Schrijf het pakket naar `%USERPROFILE%\OneDrive\Vakwerk\vakwerk-YYYY-MM-DD.json` (map aanmaken als die niet bestaat).
 6. **Inbox bijwerken** (zo komt het vanzelf op de iPad): voeg de nieuwe items/plan-blokken samen met het vorige
    inbox-pakket (`OneDrive\Vakwerk\vakwerk-inbox-bron.json`, samenvoegen op `id` — de inbox moet cumulatief blijven,
    want een nieuw gekoppeld apparaat krijgt alleen wat erin staat), schrijf dat terug, en versleutel:
-   `node tools/make-inbox.mjs <bron.json> C:\Users\Remzi\OneDrive\Vakwerk\.inbox-sleutel.json`.
+   `node tools/make-inbox.mjs <bron.json> %USERPROFILE%\OneDrive\Vakwerk\.inbox-sleutel.json` (sleutel van 22 okt 2026;
+   koppel-link staat in `OneDrive\Vakwerk\Vakwerk koppel-link.txt`).
    Commit + push `inbox/*.json`. De app haalt het op zodra de gebruiker hem opent. Het sleutelbestand nooit in de repo zetten.
    **Artifact-versie** (https://claude.ai/artifact/JiLbFoZxwcpkfcdLSx4uhQ): schrijf met ArtifactData een document
    `inbox/<id>` met `{ pack: "<pakket als JSON-string>", created }`; de app importeert het bij openen.
@@ -65,6 +66,9 @@ Claude levert samenvattingen aan via een **pakketbestand** dat de gebruiker in d
 
 Een item met `deck` en zonder `summary` wordt alleen een set flitskaarten (geen samenvatting). In de app staat elke set
 onder Vak › Oefenen › **Per set leren**; "Alles door elkaar" oefent alle kaarten van het vak gehusseld.
+**Casuskaarten**: per sessie een set `"Casus · Sessie N · …"` (order = sessie + 0.5, direct na die sessie), als `questions`
+met een voorkant die begint met `CASE — ` (de app toont dan het label "Casus") en als achterkant `**begrip**` +
+`- **Evidence:**` + `- **Explain:**` (+ `- **Exam tip:**`).
 Een set wordt geleerd in rondes (instelling "Per ronde": 5, 10 of alles), in de volgorde van `terms` (opgeslagen als `pos`):
 zet samenhangende begrippen dus bij elkaar. Houd definities kort: een **vetgedrukte kernzin** plus `- ` opsomming
 (de kaart rendert Markdown). Tabellen uit de slides → per kenmerk een vergelijkkaart, bv. "Mechanistic vs organic · Decision-making".

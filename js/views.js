@@ -958,15 +958,18 @@ export async function practiceView(root, scope, query = '') {
     draw();
   }
 
+  // Casuskaarten (voorkant begint met CASE) en lange vragen: kleinere, links uitgelijnde tekst
+  const isCase = c => /^CASE /.test(c.front);
+  const frontCls = c => isCase(c) || c.front.length > 110 ? 'long case-front' : '';
   // Bovenaan de kaart; bij Slim ook hoe vaak deze richting al fout ging
   function kindLabel(c, s, rev) {
     const wrong = dir === 'smart' ? c.dirs?.[rev ? 'r' : 'n']?.wrong || 0 : 0;
-    return `${s ? esc(s.name) + ' · ' : ''}${rev ? 'Welk begrip is dit?' : c.kind === 'vraag' ? 'Oefenvraag' : c.kind === 'begrip' ? 'Begrip' : 'Kaart'}${wrong ? ` · <span class="weak-txt">${wrong}× fout in deze richting</span>` : ''}`;
+    return `${s ? esc(s.name) + ' · ' : ''}${rev ? 'Welk begrip is dit?' : isCase(c) ? '<span class="case-tag">Casus</span> herken het begrip' : c.kind === 'vraag' ? 'Oefenvraag' : c.kind === 'begrip' ? 'Begrip' : 'Kaart'}${wrong ? ` · <span class="weak-txt">${wrong}× fout in deze richting</span>` : ''}`;
   }
 
   function typedView(c, s, rev) {
     const kind = kindLabel(c, s, rev);
-    const prompt = rev ? `<div class="flash-front long md">${markdown(c.back)}</div>` : `<div class="flash-front">${esc(c.front)}</div>`;
+    const prompt = rev ? `<div class="flash-front long md">${markdown(c.back)}</div>` : `<div class="flash-front ${frontCls(c)}">${esc(c.front)}</div>`;
     if (!flipped) return `
       <div class="flash typing">
         <span class="flash-kind">${kind}</span>
@@ -1041,7 +1044,7 @@ export async function practiceView(root, scope, query = '') {
     root.innerHTML = head + `
       <button class="flash ${flipped ? 'flipped' : ''}" data-a="flip">
         <span class="flash-kind">${kindLabel(c, s, rev)}</span>
-        ${rev ? `<span class="flash-front long md">${markdown(c.back)}</span>` : `<span class="flash-front">${esc(c.front)}</span>`}
+        ${rev ? `<span class="flash-front long md">${markdown(c.back)}</span>` : `<span class="flash-front ${frontCls(c)}">${esc(c.front)}</span>`}
         ${flipped ? (rev ? `<span class="flash-back flash-answer">${esc(c.front)}</span>` : `<span class="flash-back md">${markdown(c.back)}</span>`) : '<span class="flash-hint">Tik om het antwoord te zien</span>'}
       </button>
       <div class="grades">${flipped ? GRADES.map(g => `<button class="grade ${g.cls}" data-g="${g.key}"><b>${g.label}</b><small>${cram && g.key ? '' : intervalLabel(c.srs, g.key)}</small></button>`).join('') : `<button class="btn primary block" data-a="flip">Toon antwoord</button>`}</div>
