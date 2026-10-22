@@ -9,7 +9,7 @@ import { markdown, plainText } from './markdown.js';
 import { GRADES, schedule, isDue, isNew, intervalLabel, newSrs, shuffle, deckKey, deckSets, isWeak, isKnown, recordDir, smartDir, weightedShuffle } from './srs.js';
 import { buildVocab, keyTermsFor, checkAnswer, checkTerm, findSpans, answerSpans } from './keyterms.js';
 import { importFile, exportBackup, seedDemo, removeDemo, wipeAll, isDemoSubject } from './pack.js';
-import { PAPERS } from './ink.js';
+import { PAPERS, drawStroke } from './ink.js';
 import { shiftBlock, shiftDay, undoShift } from './planner.js';
 import { enablePlanMove } from './planmove.js';
 import { planLinks, subjectSets, setForBlock } from './plansets.js';
@@ -642,6 +642,7 @@ const PRACTICE_DIRS = [
 const PRACTICE_MODES = [
   { v: 'flip', label: 'Tikken' },
   { v: 'type', label: 'Typen' },
+  { v: 'ink', label: 'Schrijven' }, // met de Pencil in een inktvak; handig voor formules (geen automatische check)
 ];
 const PRACTICE_CHUNKS = [5, 10, 0]; // kaarten per ronde; 0 = alles in één keer
 
@@ -974,7 +975,7 @@ export async function practiceView(root, scope, query = '') {
       <div class="flash typing">
         <span class="flash-kind">${kind}</span>
         ${prompt}
-        <textarea class="type-answer" rows="${rev ? 2 : 6}" placeholder="${rev ? 'Typ het begrip…' : 'Typ je antwoord… gebruik de vakbegrippen'}" autocapitalize="sentences" spellcheck="true">${esc(typed)}</textarea>
+        <textarea class="type-answer ${rev ? 'short' : ''}" rows="${rev ? 2 : 6}" placeholder="${rev ? 'Typ of schrijf het begrip…' : 'Typ je antwoord, of schrijf met je Pencil (Krabbel)… gebruik de vakbegrippen'}" autocapitalize="sentences" spellcheck="true">${esc(typed)}</textarea>
       </div>
       <div class="grades"><button class="btn primary block" data-a="check">Controleer <small class="kbd">${/Mac|iPad|iPhone/.test(navigator.platform) ? '⌘↵' : 'Ctrl+↵'}</small></button></div>`;
     const r = result;
@@ -1001,6 +1002,95 @@ export async function practiceView(root, scope, query = '') {
       </div>
       <div class="grades">${GRADES.map(g => `<button class="grade ${g.cls} ${g.key === advice ? 'suggest' : ''}" data-g="${g.key}"><b>${g.label}</b><small>${g.key === advice ? 'advies' : cram && g.key ? '' : intervalLabel(c.srs, g.key)}</small></button>`).join('')}</div>`;
   }
+
+  // Schrijven: antwoord met de Pencil in een inktvak, daarna naast het modelantwoord en zelf beoordelen
+  let inkStrokes = [], inkImg = '', penSeen = false;
+  function inkView(c, s, rev) {
+    const kind = kindLabel(c, s, rev);
+    const prompt = rev ? `<div class="flash-front long md">${markdown(c.back)}</div>` : `<div class="flash-front ${frontCls(c)}">${esc(c.front)}</div>`;
+    if (!flipped) return `
+      <div class="flash typing inking">
+        <span class="flash-kind">${kind}</span>
+        ${prompt}
+        <div class="ink-pad ${rev ? 'short' : ''}"><canvas aria-label="Schrijf hier je antwoord"></canvas>
+          <div class="ink-tools"><button class="icon-btn small" data-a="inkundo" aria-label="Ongedaan maken">${icon('undo', 18)}</button><button class="pill" data-a="inkclear">Wis</button></div>
+          <span class="ink-hint">${rev ? 'Schrijf het begrip' : 'Schrijf je antwoord'} met je Pencil</span>
+        </div>
+      </div>
+      <div class="grades"><button class="btn primary block" data-a="inkreveal">Toon antwoord</button></div>`;
+    const mine = inkImg ? `<img class="ink-mine" src="${inkImg}" alt="Jouw geschreven antwoord">` : '<em class="muted">Niets geschreven</em>';
+    const model = rev ? `<div class="flash-answer">${esc(c.front)}</div>` : `<div class="md model">${markdown(c.back)}</div>`;
+    return `
+      <div class="flash typing flipped">
+        <span class="flash-kind">${kind}</span>
+        ${prompt}
+        <div class="type-compare">
+          <section><h4>Jouw antwoord</h4><div class="mine">${mine}</div></section>
+          <section><h4>Modelantwoord</h4>${model}</section>
+        </div>
+        <p class="muted small">Vergelijk zelf: heb je de kern en de vakbegrippen? Kies dan hoe goed het ging.</p>
+      </div>
+      <div class="grades">${GRADES.map(g => `<button class="grade ${g.cls}" data-g="${g.key}"><b>${g.label}</b><small>${cram && g.key ? '' : intervalLabel(c.srs, g.key)}</small></button>`).join('')}</div>`;
+  }
+  // Tekenen in css-pixels; zodra de Pencil gebruikt is tekent een vinger niet meer (handpalm)
+  function mountPad(cv) {
+    if (!cv) return;
+    const pad = cv.parentElement, color = getComputedStyle(pad).color;
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    const size = () => { const r = pad.getBoundingClientRect(); cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr); cv.style.width = r.width + 'px'; cv.style.height = r.height + 'px'; };
+    const ctx = cv.getContext('2d');
+    let cur = null, raf = 0;
+    const repaint = () => {
+      raf = 0;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      for (const st of cur ? [...inkStrokes, cur] : inkStrokes) drawStroke(ctx, st);
+    };
+    const soon = () => { if (!raf) raf = requestAnimationFrame(repaint); };
+    size(); repaint();
+    pad.repaint = repaint;
+    const pt = e => { const r = cv.getBoundingClientRect(); return [Math.round((e.clientX - r.left) * 10) / 10, Math.round((e.clientY - r.top) * 10) / 10, e.pointerType === 'pen' ? Math.round((e.pressure || 0.4) * 100) / 100 : 0.5]; };
+    cv.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'pen') penSeen = true;
+      else if (e.pointerType === 'touch' && penSeen) return; // handpalm of vinger na de Pencil: niet tekenen
+      e.preventDefault();
+      try { cv.setPointerCapture(e.pointerId); } catch {}
+      cur = { id: e.pointerId, tool: 'pen', c: color, w: e.pointerType === 'pen' ? 2.4 : 2.6, p: pt(e) };
+      pad.classList.add('used');
+      soon();
+    });
+    cv.addEventListener('pointermove', e => {
+      if (!cur || e.pointerId !== cur.id) return;
+      e.preventDefault();
+      const evs = e.getCoalescedEvents?.() || [];
+      for (const ev of evs.length ? evs : [e]) cur.p.push(...pt(ev));
+      soon();
+    });
+    const end = e => {
+      if (!cur || e.pointerId !== cur.id) return;
+      const { id, ...st } = cur;
+      if (st.p.length) inkStrokes.push(st);
+      cur = null;
+      soon();
+    };
+    cv.addEventListener('pointerup', end);
+    cv.addEventListener('pointercancel', end);
+  }
+  // Je geschreven antwoord als plaatje bewaren voor de vergelijking (alleen het beschreven deel)
+  function inkSnapshot() {
+    if (!inkStrokes.length) return '';
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const st of inkStrokes) for (let i = 0; i < st.p.length; i += 3) { x0 = Math.min(x0, st.p[i]); y0 = Math.min(y0, st.p[i + 1]); x1 = Math.max(x1, st.p[i]); y1 = Math.max(y1, st.p[i + 1]); }
+    const pad = 12, k = 2, w = x1 - x0 + pad * 2, h = y1 - y0 + pad * 2;
+    const c = document.createElement('canvas');
+    c.width = Math.ceil(w * k); c.height = Math.ceil(h * k);
+    const ctx = c.getContext('2d');
+    ctx.setTransform(k, 0, 0, k, (pad - x0) * k, (pad - y0) * k);
+    for (const st of inkStrokes) drawStroke(ctx, st);
+    return c.toDataURL('image/png');
+  }
+  function inkReveal() { inkImg = inkSnapshot(); flipped = true; draw(); }
 
   function draw() {
     const c = queue[0];
@@ -1038,7 +1128,13 @@ export async function practiceView(root, scope, query = '') {
     if (mode === 'type') {
       root.innerHTML = head + typedView(c, s, rev) + '</div>';
       if (flipped && !result.rev) { const m = root.querySelector('.model'); if (m) markDom(m, result.terms.concat(result.bonus)); }
-      if (!flipped) { const ta = root.querySelector('.type-answer'); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+      // Alleen met een echt toetsenbord direct focussen; op de iPad zou anders het schermtoetsenbord over Krabbel heen springen
+      if (!flipped && !navigator.maxTouchPoints) { const ta = root.querySelector('.type-answer'); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+      return;
+    }
+    if (mode === 'ink') {
+      root.innerHTML = head + inkView(c, s, rev) + '</div>';
+      if (!flipped) mountPad(root.querySelector('.ink-pad canvas'));
       return;
     }
     root.innerHTML = head + `
@@ -1064,6 +1160,7 @@ export async function practiceView(root, scope, query = '') {
     flipped = false;
     typed = '';
     result = null;
+    inkStrokes = []; inkImg = '';
     draw();
   }
   root.oninput = e => { if (e.target.matches('.type-answer')) typed = e.target.value; };
@@ -1075,6 +1172,9 @@ export async function practiceView(root, scope, query = '') {
     if (a === 'back') go(back);
     if (a === 'flip' && !flipped) { flipped = true; draw(); }
     if (a === 'check' && queue[0]) check(queue[0], reversed(queue[0]));
+    if (a === 'inkreveal' && queue[0]) inkReveal();
+    if (a === 'inkundo') { inkStrokes.pop(); root.querySelector('.ink-pad')?.repaint?.(); }
+    if (a === 'inkclear') { inkStrokes = []; const p = root.querySelector('.ink-pad'); p?.classList.remove('used'); p?.repaint?.(); }
     if (a === 'nextround') { nextRound(); draw(); }
     if (a === 'againround') { startRound(roundCards); draw(); }
     if (a === 'cumul') { startRound(pool.slice(0, round * chunk), true); draw(); }
@@ -1094,7 +1194,7 @@ export async function practiceView(root, scope, query = '') {
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); check(queue[0], reversed(queue[0])); }
       return;
     }
-    if (e.key === ' ') { e.preventDefault(); if (!flipped) { if (mode === 'type') check(queue[0], reversed(queue[0])); else { flipped = true; draw(); } } }
+    if (e.key === ' ') { e.preventDefault(); if (!flipped) { if (mode === 'type') check(queue[0], reversed(queue[0])); else if (mode === 'ink') inkReveal(); else { flipped = true; draw(); } } }
     if (flipped && '1234'.includes(e.key)) grade(+e.key - 1);
   };
   document.addEventListener('keydown', key);
