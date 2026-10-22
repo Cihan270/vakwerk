@@ -1,5 +1,5 @@
 // Service worker: houdt de app offline beschikbaar. Verhoog VERSION bij elke release.
-const VERSION = 'vakwerk-v21';
+const VERSION = 'vakwerk-v22';
 const ASSETS = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/app.js', './js/db.js', './js/util.js', './js/views.js', './js/editor.js', './js/ink.js',

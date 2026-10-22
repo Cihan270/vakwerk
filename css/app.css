@@ -57,7 +57,7 @@ code { font: 14px ui-monospace, "SF Mono", Menlo, monospace; background: var(--s
 [hidden] { display: none !important; }
 
 /* ---------- Knoppen ---------- */
-button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 button:disabled { opacity: .4; cursor: default; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px; padding: 0 16px;
@@ -366,6 +366,9 @@ body.plan-moving .pblk.empty-slot::after { content: attr(data-label); color: var
 
 /* ---------- Oefenen ---------- */
 .practice { max-width: 760px; }
+/* Oefenen: een rustende hand mag geen tekst selecteren (geen Kopieer/Zoek op/Vertaal-menu); het typvak blijft selecteerbaar */
+.view.practice, .view.practice * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.view.practice textarea, .view.practice input { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
 .progress { height: 6px; background: var(--surface-2); border-radius: 6px; overflow: hidden; margin: -6px 0 24px; }
 .progress i { display: block; height: 100%; background: var(--c); transition: width .3s; }
 .flash {
