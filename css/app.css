@@ -584,13 +584,14 @@ mark.tc-miss { background: color-mix(in srgb, var(--warn) 24%, transparent); col
 .page.board { position: absolute; inset: 0; border-radius: 0; box-shadow: none; touch-action: none; overflow: hidden; }
 .paper-pick.four { grid-template-columns: repeat(4, 1fr); }
 .sel-box { position: absolute; border: 1.5px dashed var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); border-radius: 6px; touch-action: none; cursor: move; z-index: 2; }
-.sel-bar { position: absolute; z-index: 3; display: flex; gap: 2px; background: #1d1e22; color: #fff; border-radius: 12px; padding: 4px; box-shadow: 0 6px 20px rgba(0, 0, 0, .25); }
+.sel-bar { position: absolute; z-index: 3; touch-action: none; display: flex; gap: 2px; background: #1d1e22; color: #fff; border-radius: 12px; padding: 4px; box-shadow: 0 6px 20px rgba(0, 0, 0, .25); }
 .sel-bar button { display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; height: 36px; border-radius: 8px; font-size: 14px; font-weight: 600; }
 .sel-bar button:active { background: rgba(255, 255, 255, .15); }
 .sel-bar .danger { color: #ff8a8a; }
 
 .ed-status { position: absolute; right: 14px; bottom: calc(14px + var(--safe-b)); display: flex; gap: 6px; z-index: 4; pointer-events: none; }
 .ed-status .pg-nav { padding: 0 8px; }
+.ed-status .paste-btn { gap: 6px; }
 .ed-status .pg-nav:disabled { opacity: .35; }
 .ed-status .pg-next svg { transform: scaleX(-1); }
 .ed-status .pill { pointer-events: auto; background: rgba(29, 30, 34, .78); color: #fff; display: inline-flex; align-items: center; font-variant-numeric: tabular-nums; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }

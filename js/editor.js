@@ -10,6 +10,7 @@ import {
 const ZOOM_MIN = 0.1, ZOOM_MAX = 5; // canvas-modus: 10% – 500%
 
 const MAX_PIXELS = 5.5e6;          // max pixels per canvas (geheugenlimiet iPad Safari)
+let inkClip = null;                // gekopieerde inkt { strokes, notebookId }; blijft staan als je een andere notitie opent
 const WIDTHS = { pen: [1.6, 2.6, 4.2], hl: [14, 22, 32], eraser: [10, 20, 40] };
 const DEFAULTS = {
   tool: 'pen',
@@ -76,7 +77,7 @@ export async function openEditor(root, notebookId, { onExit }) {
       </div>
     </header>
     <div class="ed-scroll${board ? ' board' : ''}"><div class="ed-pages"></div></div>
-    <div class="ed-status"><button class="pill zoom-ind" data-a="zoomreset" hidden></button><button class="pill pg-nav" data-a="pgprev" aria-label="Vorige pagina">${icon('back', 18)}</button><button class="pill pg-ind" data-a="pglist" aria-label="Naar pagina…"></button><button class="pill pg-nav pg-next" data-a="pgnext" aria-label="Volgende pagina">${icon('back', 18)}</button></div>
+    <div class="ed-status"><button class="pill paste-btn" data-a="paste" hidden>${icon('clipboard', 18)}<span>Plak</span></button><button class="pill zoom-ind" data-a="zoomreset" hidden></button><button class="pill pg-nav" data-a="pgprev" aria-label="Vorige pagina">${icon('back', 18)}</button><button class="pill pg-ind" data-a="pglist" aria-label="Naar pagina…"></button><button class="pill pg-nav pg-next" data-a="pgnext" aria-label="Volgende pagina">${icon('back', 18)}</button></div>
     <div class="ed-player" hidden>
       <button class="icon-btn" data-a="p-back" aria-label="10 seconden terug">${icon('rewind')}</button>
       <button class="icon-btn play" data-a="p-play" aria-label="Afspelen">${icon('play')}</button>
@@ -454,6 +455,7 @@ export async function openEditor(root, notebookId, { onExit }) {
     }
   });
   $('.ed-status', ed).addEventListener('click', async e => {
+    if (e.target.closest('[data-a=paste]')) return pasteInk();
     const nav = e.target.closest('[data-a=pgprev], [data-a=pgnext], [data-a=pglist]');
     if (nav) {
       const i = navBase();
@@ -725,7 +727,10 @@ export async function openEditor(root, notebookId, { onExit }) {
   // Handpalm = aanraking vlak na de Pencil, of een groot contactvlak terwijl je aan het schrijven bent.
   // (Een gewone vingertop meldt op de iPad vaak al radiusX > 28; die moet gewoon kunnen scrollen.)
   const isPalm = t => Date.now() - penAt < 450 || ((t.radiusX || 0) > 45 && Date.now() - penAt < 3000);
+  // Knoppenbalk van een selectie: touch niet blokkeren, anders stuurt iOS geen 'click' (Wis/Kopie/Kleur deden dan niets)
+  const onSelBar = e => !!e.target.closest?.('.sel-bar');
   function onTouchStart(e) {
+    if (onSelBar(e)) return;
     const all = [...e.touches];
     if (all.some(isStylus)) { e.preventDefault(); return; }
     if (e.target.closest('.sel-box')) { e.preventDefault(); return; }
@@ -750,6 +755,7 @@ export async function openEditor(root, notebookId, { onExit }) {
     } else if (all.length === 1 && T.fingerDraw && e.target.closest('.page')) e.preventDefault();
   }
   function onTouchMove(e) {
+    if (onSelBar(e)) return;
     const all = [...e.touches];
     if (all.some(isStylus) || active?.type === 'pen') { e.preventDefault(); return; }
     if (gesture) for (const t of e.changedTouches) {
@@ -871,7 +877,8 @@ export async function openEditor(root, notebookId, { onExit }) {
     bar.className = 'sel-bar';
     bar.innerHTML = `
       <button data-s="color" aria-label="Kleur">${icon('edit', 18)}<span>Kleur</span></button>
-      <button data-s="dup" aria-label="Dupliceer">${icon('copy', 18)}<span>Kopie</span></button>
+      <button data-s="copy" aria-label="Kopieer">${icon('clipboard', 18)}<span>Kopieer</span></button>
+      <button data-s="dup" aria-label="Dupliceer">${icon('copy', 18)}<span>Dupliceer</span></button>
       <button data-s="del" class="danger" aria-label="Verwijder">${icon('trash', 18)}<span>Wis</span></button>
       <button data-s="done" aria-label="Klaar">${icon('check', 18)}</button>`;
     st.el.append(box, bar);
@@ -883,6 +890,7 @@ export async function openEditor(root, notebookId, { onExit }) {
       const b = e.target.closest('button');
       if (!b) return;
       if (b.dataset.s === 'del') selDelete();
+      if (b.dataset.s === 'copy') selCopy();
       if (b.dataset.s === 'dup') selDuplicate();
       if (b.dataset.s === 'done') clearSelection();
       if (b.dataset.s === 'color') selColorMenu(b);
@@ -1126,6 +1134,49 @@ export async function openEditor(root, notebookId, { onExit }) {
     save(pg);
     select(pg, copies);
   }
+  // Kopiëren + plakken: de selectie gaat naar inkClip, "Plak" (rechtsonder of ⌘V) zet hem op de pagina die in beeld is
+  function selCopy() {
+    inkClip = { strokes: selStrokes(), notebookId };
+    updatePasteBtn();
+    toast('Gekopieerd — ga naar een pagina en tik rechtsonder op "Plak"');
+  }
+  function updatePasteBtn() { $('.paste-btn', ed).hidden = !inkClip; }
+  function pasteInk() {
+    if (!inkClip) return;
+    const pg = pages[currentPageIndex()], st = S.get(pg.id);
+    if (!st.canvas) attach(pg);
+    // zichtbaar deel van de pagina, in pagina-eenheden
+    let vis;
+    if (board) vis = visibleRect();
+    else {
+      const r = st.el.getBoundingClientRect(), sr = scrollEl.getBoundingClientRect();
+      const ux = x => (x - r.left) / r.width * PAGE_W, uy = y => (y - r.top) / r.height * PAGE_H;
+      vis = [Math.max(0, ux(sr.left)), Math.max(0, uy(sr.top)), Math.min(PAGE_W, ux(sr.right)), Math.min(PAGE_H, uy(sr.bottom))];
+    }
+    // Op dezelfde plek als dat helemaal in beeld is, anders midden in beeld
+    const [x0, y0, x1, y1] = unionBox(inkClip.strokes);
+    let dx = 0, dy = 0;
+    if (x0 < vis[0] || y0 < vis[1] || x1 > vis[2] || y1 > vis[3]) {
+      dx = (vis[0] + vis[2]) / 2 - (x0 + x1) / 2;
+      dy = (vis[1] + vis[3]) / 2 - (y0 + y1) / 2;
+    }
+    // Ligt er al een kopie precies daar (twee keer plakken, of op de bronpagina)? Iets opschuiven
+    const taken = new Set(pg.strokes.map(s => s.b.map(Math.round).join()));
+    const first = inkClip.strokes[0].b;
+    for (let i = 0; i < 20 && taken.has([first[0] + dx, first[1] + dy, first[2] + dx, first[3] + dy].map(Math.round).join()); i++) { dx += 30 / zf(); dy += 30 / zf(); }
+    const copies = inkClip.strokes.map(s => {
+      const n = translateStroke(s, dx, dy, uid('s'));
+      if (inkClip.notebookId !== notebookId) { delete n.r; delete n.t; } // opname hoort bij de andere notitie
+      return n;
+    });
+    const before = pg.strokes;
+    pg.strokes = [...before, ...copies];
+    pushUndo(pg, before, pg.strokes);
+    render(pg);
+    save(pg);
+    select(pg, copies);
+  }
+  updatePasteBtn();
   function selColorMenu(anchor) {
     const cols = [...PEN_COLORS, ...HL_COLORS];
     const pop = popover(anchor, `<div class="swatches pop">${cols.map(c => `<button class="sw" data-c="${c}" style="--c:${c}"></button>`).join('')}</div>`);
@@ -1453,6 +1504,8 @@ export async function openEditor(root, notebookId, { onExit }) {
     if (e.target.matches('input, textarea')) return;
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
+    if (mod && e.key.toLowerCase() === 'c' && sel) { e.preventDefault(); selCopy(); return; }
+    if (mod && e.key.toLowerCase() === 'v' && inkClip) { e.preventDefault(); pasteInk(); return; }
     const map = { p: 'pen', h: 'hl', e: 'eraser', l: 'lasso' };
     if (!mod && map[e.key]) setTool(map[e.key]);
     if (e.key === 'Escape') { clearSelection(); clearImageSel(); }
