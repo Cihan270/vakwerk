@@ -588,6 +588,19 @@ mark.tc-miss { background: color-mix(in srgb, var(--warn) 24%, transparent); col
 .sel-bar button { display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; height: 36px; border-radius: 8px; font-size: 14px; font-weight: 600; }
 .sel-bar button:active { background: rgba(255, 255, 255, .15); }
 .sel-bar .danger { color: #ff8a8a; }
+/* Getypte tekst op een pagina */
+.pg-text { position: absolute; z-index: 1; margin: 0; padding: 0 2px; border: 1px dashed transparent; border-radius: 4px; background: transparent; color: #1c1d21; font-family: -apple-system, "Segoe UI", system-ui, sans-serif; resize: none; overflow: hidden; outline: none; pointer-events: none; -webkit-user-select: text; user-select: text; white-space: pre-wrap; overflow-wrap: break-word; }
+.editor[data-tool=text] .pg-text { pointer-events: auto; cursor: text; border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.editor[data-tool=text] .pg-text:focus { border-style: solid; border-color: var(--accent); background: color-mix(in srgb, var(--accent) 4%, transparent); }
+.txt-bar button { padding: 0 9px; }
+.txt-bar [data-x=move] { cursor: move; }
+.wd.ts { font-weight: 700; color: var(--text); }
+/* Laptop: muisaanwijzer per gereedschap */
+@media (hover: hover) and (pointer: fine) {
+  .editor[data-tool=pen] .page, .editor[data-tool=hl] .page, .editor[data-tool=lasso] .page { cursor: crosshair; }
+  .editor[data-tool=eraser] .page { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22'><circle cx='11' cy='11' r='9' fill='white' fill-opacity='.55' stroke='%23333' stroke-width='1.5'/></svg>") 11 11, cell; }
+  .editor[data-tool=text] .page { cursor: text; }
+}
 
 .ed-status { position: absolute; right: 14px; bottom: calc(14px + var(--safe-b)); display: flex; gap: 6px; z-index: 4; pointer-events: none; }
 .ed-status .pg-nav { padding: 0 8px; }

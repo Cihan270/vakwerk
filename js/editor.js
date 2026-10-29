@@ -17,6 +17,7 @@ const DEFAULTS = {
   pen: { c: PEN_COLORS[0], w: 2.6 },
   hl: { c: HL_COLORS[0], w: 22 },
   eraser: { w: 20, mode: 'stroke' },
+  text: { c: PEN_COLORS[0], s: 22 },
   fingerDraw: false,
   scribble: true,
   hold: true,
@@ -42,7 +43,7 @@ export async function openEditor(root, notebookId, { onExit }) {
   const zf = () => board ? view.z : 1; // lijndiktes blijven even dik op het scherm, hoe ver je ook zoomt
   const recordings = (await db.by('recordings', 'notebookId', notebookId)).sort((a, b) => a.created - b.created);
   const saved = await getSetting('tools', {});
-  const T = { ...DEFAULTS, ...saved, pen: { ...DEFAULTS.pen, ...saved.pen }, hl: { ...DEFAULTS.hl, ...saved.hl }, eraser: { ...DEFAULTS.eraser, ...saved.eraser } };
+  const T = { ...DEFAULTS, ...saved, pen: { ...DEFAULTS.pen, ...saved.pen }, hl: { ...DEFAULTS.hl, ...saved.hl }, eraser: { ...DEFAULTS.eraser, ...saved.eraser }, text: { ...DEFAULTS.text, ...saved.text } };
   const saveTools = debounce(() => setSetting('tools', T), 400);
 
   root.innerHTML = `
@@ -57,15 +58,16 @@ export async function openEditor(root, notebookId, { onExit }) {
       </div>
       <div class="ed-tools">
         <div class="seg tools">
-          <button class="tool" data-tool="pen" aria-label="Pen">${icon('pen')}</button>
-          <button class="tool" data-tool="hl" aria-label="Markeerstift">${icon('highlighter')}</button>
-          <button class="tool" data-tool="eraser" aria-label="Gum">${icon('eraser')}</button>
-          <button class="tool" data-tool="lasso" aria-label="Lasso">${icon('lasso')}</button>
+          <button class="tool" data-tool="pen" aria-label="Pen (P)">${icon('pen')}</button>
+          <button class="tool" data-tool="hl" aria-label="Markeerstift (H)">${icon('highlighter')}</button>
+          <button class="tool" data-tool="eraser" aria-label="Gum (E)">${icon('eraser')}</button>
+          <button class="tool" data-tool="lasso" aria-label="Lasso (L)">${icon('lasso')}</button>
+          <button class="tool" data-tool="text" aria-label="Tekst (T)">${icon('text')}</button>
         </div>
         <div class="tool-opts"></div>
         <div class="seg">
-          <button class="icon-btn" data-a="undo" aria-label="Ongedaan maken">${icon('undo')}</button>
-          <button class="icon-btn" data-a="redo" aria-label="Opnieuw">${icon('redo')}</button>
+          <button class="icon-btn" data-a="undo" aria-label="Ongedaan maken (⌘Z)">${icon('undo')}</button>
+          <button class="icon-btn" data-a="redo" aria-label="Opnieuw (⇧⌘Z)">${icon('redo')}</button>
         </div>
       </div>
       <div class="ed-right">
@@ -77,7 +79,7 @@ export async function openEditor(root, notebookId, { onExit }) {
       </div>
     </header>
     <div class="ed-scroll${board ? ' board' : ''}"><div class="ed-pages"></div></div>
-    <div class="ed-status"><button class="pill paste-btn" data-a="paste" hidden>${icon('clipboard', 18)}<span>Plak</span></button><button class="pill zoom-ind" data-a="zoomreset" hidden></button><button class="pill pg-nav" data-a="pgprev" aria-label="Vorige pagina">${icon('back', 18)}</button><button class="pill pg-ind" data-a="pglist" aria-label="Naar pagina…"></button><button class="pill pg-nav pg-next" data-a="pgnext" aria-label="Volgende pagina">${icon('back', 18)}</button></div>
+    <div class="ed-status"><button class="pill paste-btn" data-a="paste" hidden>${icon('clipboard', 18)}<span>Plak</span></button><button class="pill zoom-ind" data-a="zoomreset" hidden></button><button class="pill pg-nav" data-a="pgprev" aria-label="Vorige pagina (←)">${icon('back', 18)}</button><button class="pill pg-ind" data-a="pglist" aria-label="Naar pagina…"></button><button class="pill pg-nav pg-next" data-a="pgnext" aria-label="Volgende pagina (→)">${icon('back', 18)}</button></div>
     <div class="ed-player" hidden>
       <button class="icon-btn" data-a="p-back" aria-label="10 seconden terug">${icon('rewind')}</button>
       <button class="icon-btn play" data-a="p-play" aria-label="Afspelen">${icon('play')}</button>
@@ -117,11 +119,12 @@ export async function openEditor(root, notebookId, { onExit }) {
   }
   function styleEl(pg) {
     const st = S.get(pg.id);
-    if (board) { st.el.classList.add('board'); Object.assign(st.el.style, boardBg(pg.paper, view, T.dark)); placeImages(pg); return; }
+    if (board) { st.el.classList.add('board'); Object.assign(st.el.style, boardBg(pg.paper, view, T.dark)); placeImages(pg); placeTexts(pg); return; }
     st.el.style.width = pageW + 'px';
     st.el.style.height = pageH + 'px';
     Object.assign(st.el.style, paperCss(pg.paper, scale, T.dark));
     placeImages(pg);
+    placeTexts(pg);
   }
   // st.k = pixels per eenheid, st.ox/oy = verschuiving in pixels (alleen in canvas-modus ≠ 0)
   function sizeCanvas(st, c) {
@@ -233,6 +236,144 @@ export async function openEditor(root, notebookId, { onExit }) {
       const img = new Image();
       img.src = u;
       try { await img.decode(); ctx.drawImage(img, im.x, im.y, im.w, im.h); } catch {}
+    }
+  }
+
+  // ---------- Getypte tekst ----------
+  // pg.texts = [{ id, x, y, w, t, s, c }] in pagina-eenheden (x/y = linkerbovenhoek, s = lettergrootte).
+  // Een tekstvak is een <textarea> boven de inkt; alleen met het tekst-gereedschap kun je erin klikken.
+  const TEXT_SIZES = [18, 22, 30];
+  const lineH = s => Math.round(s * 1.64); // 22 → 36 = lijnafstand van het lijntjespapier
+  let tedit = null; // tekstvak dat je nu bewerkt { pg, t, el, before }
+  let freshText = null; // id van een tekstvak dat net is aangemaakt (nog leeg)
+  const txtBar = document.createElement('div');
+  txtBar.className = 'sel-bar txt-bar';
+  txtBar.innerHTML = `<button data-x="move" aria-label="Verplaatsen">${icon('move', 18)}</button><button data-x="del" class="danger" aria-label="Verwijder tekst">${icon('trash', 18)}</button>`;
+  const textColor = c => (T.dark && c === PEN_COLORS[0] ? '#e9e9ec' : c);
+  function placeTexts(pg) {
+    const st = S.get(pg.id);
+    if (!st) return;
+    const k = cssK(), [ox, oy] = cssO();
+    const have = new Map([...st.el.querySelectorAll(':scope > .pg-text')].map(el => [el.dataset.txt, el]));
+    for (const t of pg.texts || []) {
+      let el = have.get(t.id);
+      have.delete(t.id);
+      if (!el) el = makeTextEl(pg, t);
+      if (!el.isConnected) st.el.append(el);
+      if (document.activeElement !== el && el.value !== t.t) el.value = t.t;
+      Object.assign(el.style, {
+        left: t.x * k + ox + 'px', top: t.y * k + oy + 'px', width: t.w * k + 'px',
+        fontSize: t.s * k + 'px', lineHeight: lineH(t.s) * k + 'px', color: textColor(t.c),
+      });
+      fitText(el);
+    }
+    for (const el of have.values()) if (tedit?.el !== el) el.remove();
+    if (tedit?.pg === pg) placeTxtBar();
+  }
+  function fitText(el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }
+  function makeTextEl(pg, t) {
+    const el = document.createElement('textarea');
+    el.className = 'pg-text';
+    el.dataset.txt = t.id;
+    el.rows = 1;
+    el.spellcheck = false; // alleen tijdens typen, anders blijven de rode kronkels staan
+    el.value = t.t;
+    el.addEventListener('focus', () => { el.spellcheck = true; startTextEdit(pg, t.id, el); });
+    el.addEventListener('input', () => { if (tedit?.el === el) { tedit.t.t = el.value; fitText(el); placeTxtBar(); } });
+    el.addEventListener('blur', () => { el.spellcheck = false; if (tedit?.el === el) endTextEdit(); });
+    el.addEventListener('keydown', e => { if (e.key === 'Escape') el.blur(); });
+    return el;
+  }
+  function startTextEdit(pg, id, el) {
+    if (tedit) endTextEdit();
+    // kopie van het object, zodat 'ongedaan maken' de oude tekst nog heeft; een net gemaakt vak hoort niet bij 'before'
+    const before = (pg.texts || []).filter(x => x.id !== freshText);
+    freshText = null;
+    pg.texts = (pg.texts || []).map(x => (x.id === id ? { ...x } : x));
+    tedit = { pg, el, before, t: pg.texts.find(x => x.id === id) };
+    S.get(pg.id).el.append(txtBar);
+    placeTxtBar();
+  }
+  function endTextEdit() {
+    const { pg, t, before, el } = tedit;
+    tedit = null;
+    txtBar.remove();
+    if (!t.t.trim()) { pg.texts = pg.texts.filter(x => x !== t); el.remove(); }
+    const old = before.find(x => x.id === t.id);
+    const changed = !old ? pg.texts.includes(t) : (!pg.texts.includes(t) || ['t', 'x', 'y', 'c', 's'].some(k => old[k] !== t[k]));
+    if (changed) { pushUndo(pg, before, pg.texts, 'texts'); save(pg); }
+    else pg.texts = before;
+    placeTexts(pg);
+  }
+  function placeTxtBar() {
+    if (!tedit) return;
+    const { t } = tedit, k = cssK(), [ox, oy] = cssO();
+    const top = t.y * k + oy - 50;
+    txtBar.style.left = t.x * k + ox + 'px';
+    txtBar.style.top = (top < 4 ? t.y * k + oy + tedit.el.offsetHeight + 8 : top) + 'px';
+  }
+  // Nieuw tekstvak op een punt (op lijntjespapier netjes op een regel)
+  const onLines = (pg, s) => !board && (pg.paper === 'lined' || pg.paper === 'cornell') && s === 22;
+  const snapLine = y => 110 + 36 * Math.round((y - 110) / 36);
+  function newText(pg, x, y) {
+    const s = T.text.s, lh = lineH(s);
+    if (onLines(pg, s)) y = snapLine(y - 18);
+    else y -= lh / 2;
+    const w = board ? 520 : Math.max(160, Math.min(640, PAGE_W - x - 30));
+    if (!board) x = Math.min(x, PAGE_W - w - 10);
+    const t = { id: uid('t'), x: r1(x), y: r1(Math.max(0, y)), w, t: '', s, c: T.text.c };
+    pg.texts = [...(pg.texts || []), t];
+    placeTexts(pg);
+    freshText = t.id;
+    S.get(pg.id).el.querySelector(`.pg-text[data-txt="${t.id}"]`).focus();
+  }
+  const textAt = el => el?.closest?.('.pg-text');
+  txtBar.addEventListener('pointerdown', e => {
+    const b = e.target.closest('button');
+    e.preventDefault(); // tekstvak houdt de focus
+    e.stopPropagation();
+    if (!b || !tedit) return;
+    if (b.dataset.x === 'del') { tedit.t.t = ''; tedit.el.value = ''; tedit.el.blur(); return; }
+    // verslepen
+    const { pg, t } = tedit, st = S.get(pg.id);
+    try { txtBar.setPointerCapture(e.pointerId); } catch {}
+    const [x0, y0] = toUnit(e, st), sx = t.x, sy = t.y;
+    const move = ev => {
+      if (ev.pointerId !== e.pointerId || !tedit) return;
+      const [x, y] = toUnit(ev, st);
+      t.x = r1(sx + x - x0);
+      t.y = r1(sy + y - y0);
+      if (!board) { t.x = Math.min(PAGE_W - 40, Math.max(-t.w + 40, t.x)); t.y = Math.min(PAGE_H - 30, Math.max(0, t.y)); }
+      placeTexts(pg);
+    };
+    const up = ev => {
+      if (ev.pointerId !== e.pointerId) return;
+      if (tedit && onLines(pg, t.s)) { t.y = snapLine(t.y); placeTexts(pg); }
+      txtBar.removeEventListener('pointermove', move);
+      txtBar.removeEventListener('pointerup', up);
+      txtBar.removeEventListener('pointercancel', up);
+    };
+    txtBar.addEventListener('pointermove', move);
+    txtBar.addEventListener('pointerup', up);
+    txtBar.addEventListener('pointercancel', up);
+  });
+  // Tekst op een canvas tekenen (export en miniatuur), met dezelfde regelafbreking als op het scherm
+  function drawTextsOn(ctx, pg) {
+    for (const t of pg.texts || []) {
+      const lh = lineH(t.s);
+      ctx.font = `${t.s}px -apple-system, "Segoe UI", system-ui, sans-serif`;
+      ctx.fillStyle = t.c;
+      ctx.textBaseline = 'middle';
+      let y = t.y + lh / 2;
+      for (const para of t.t.split('\n')) {
+        let line = '';
+        for (const word of para.split(' ')) {
+          const test = line ? line + ' ' + word : word;
+          if (line && ctx.measureText(test).width > t.w - 4) { ctx.fillText(line, t.x + 2, y); y += lh; line = word; } else line = test;
+        }
+        ctx.fillText(line, t.x + 2, y);
+        y += lh;
+      }
     }
   }
 
@@ -386,7 +527,9 @@ export async function openEditor(root, notebookId, { onExit }) {
     if (!pg) return;
     clearSelection();
     clearImageSel();
-    if (op.kind === 'images') { pg.images = op[which]; placeImages(pg); } else { pg.strokes = op[which]; render(pg); }
+    if (op.kind === 'images') { pg.images = op[which]; placeImages(pg); }
+    else if (op.kind === 'texts') { pg.texts = op[which]; placeTexts(pg); }
+    else { pg.strokes = op[which]; render(pg); }
     save(pg);
   }
   function doUndo() { const op = undo.pop(); if (!op) return; applyOp(op, 'before'); redo.push(op); updateUndoBtns(); }
@@ -400,15 +543,17 @@ export async function openEditor(root, notebookId, { onExit }) {
   // ---------- Werkbalk ----------
   function updateToolbar() {
     $$('.tool', ed).forEach(b => b.classList.toggle('on', b.dataset.tool === T.tool));
+    ed.dataset.tool = T.tool; // muisaanwijzer en klikbare tekstvakken (css)
     $('[data-a=hand]', ed).classList.toggle('on', T.fingerDraw);
     let h = '';
-    if (T.tool === 'pen' || T.tool === 'hl') {
-      const cols = T.tool === 'pen' ? PEN_COLORS : HL_COLORS;
+    if (T.tool === 'pen' || T.tool === 'hl' || T.tool === 'text') {
+      const cols = T.tool === 'hl' ? HL_COLORS : PEN_COLORS;
       const cur = T[T.tool].c;
       const custom = !cols.includes(cur);
       h += `<div class="swatches">${cols.map(c => `<button class="sw ${c === cur ? 'on' : ''}" data-c="${c}" style="--c:${c}" aria-label="Kleur"></button>`).join('')}
         <label class="sw custom ${custom ? 'on' : ''}" style="--c:${custom ? cur : 'conic-gradient(red,yellow,lime,aqua,blue,magenta,red)'}" aria-label="Eigen kleur"><input type="color" value="${custom ? cur : '#333333'}"></label></div>`;
-      h += `<div class="widths">${WIDTHS[T.tool].map(w => `<button class="wd ${w === T[T.tool].w ? 'on' : ''}" data-w="${w}" aria-label="Dikte"><i style="width:${T.tool === 'pen' ? 3 + w * 2.2 : 6 + w / 3}px;height:${T.tool === 'pen' ? 3 + w * 2.2 : 6 + w / 3}px;background:${T.tool === 'hl' ? T.hl.c : 'currentColor'}"></i></button>`).join('')}</div>`;
+      if (T.tool === 'text') h += `<div class="widths">${TEXT_SIZES.map((s, i) => `<button class="wd ts ${s === T.text.s ? 'on' : ''}" data-ts="${s}" aria-label="${['Klein', 'Normaal', 'Groot'][i]}" style="font-size:${11 + i * 4}px">A</button>`).join('')}</div>`;
+      else h += `<div class="widths">${WIDTHS[T.tool].map(w => `<button class="wd ${w === T[T.tool].w ? 'on' : ''}" data-w="${w}" aria-label="Dikte"><i style="width:${T.tool === 'pen' ? 3 + w * 2.2 : 6 + w / 3}px;height:${T.tool === 'pen' ? 3 + w * 2.2 : 6 + w / 3}px;background:${T.tool === 'hl' ? T.hl.c : 'currentColor'}"></i></button>`).join('')}</div>`;
     } else if (T.tool === 'eraser') {
       h += `<div class="seg small"><button class="pill ${T.eraser.mode === 'stroke' ? 'on' : ''}" data-em="stroke">Hele lijn</button><button class="pill ${T.eraser.mode === 'precise' ? 'on' : ''}" data-em="precise">Precies</button></div>`;
       h += `<div class="widths">${WIDTHS.eraser.map(w => `<button class="wd ${w === T.eraser.w ? 'on' : ''}" data-w="${w}" aria-label="Grootte"><i class="ring" style="width:${6 + w / 2.2}px;height:${6 + w / 2.2}px"></i></button>`).join('')}</div>`;
@@ -417,7 +562,7 @@ export async function openEditor(root, notebookId, { onExit }) {
     }
     optsEl.innerHTML = h;
     const ci = $('input[type=color]', optsEl);
-    if (ci) ci.addEventListener('input', e => { T[T.tool].c = e.target.value; saveTools(); updateToolbar(); });
+    if (ci) ci.addEventListener('input', e => { T[T.tool].c = e.target.value; styleEditingText(); saveTools(); updateToolbar(); });
   }
   updateToolbar();
 
@@ -427,12 +572,24 @@ export async function openEditor(root, notebookId, { onExit }) {
     if (b.dataset.c) T[T.tool].c = b.dataset.c;
     if (b.dataset.w) T[T.tool].w = +b.dataset.w;
     if (b.dataset.em) T.eraser.mode = b.dataset.em;
+    if (b.dataset.ts) T.text.s = +b.dataset.ts;
+    if (T.tool === 'text') styleEditingText();
     saveTools();
     updateToolbar();
   });
 
+  // Tekst-gereedschap: kleur/grootte kiezen terwijl je typt geldt voor dat tekstvak (de knop pakt de focus niet af)
+  optsEl.addEventListener('pointerdown', e => { if (tedit && e.target.closest('button')) e.preventDefault(); });
+  function styleEditingText() {
+    if (!tedit) return;
+    tedit.t.c = T.text.c;
+    tedit.t.s = T.text.s;
+    placeTexts(tedit.pg);
+  }
+
   function setTool(t) {
     if (T.tool === t && (t === 'pen' || t === 'hl')) return;
+    if (t !== 'text') tedit?.el.blur();
     T.tool = t;
     if (t !== 'lasso') { clearSelection(); clearImageSel(); }
     saveTools();
@@ -590,6 +747,7 @@ export async function openEditor(root, notebookId, { onExit }) {
     const type = e.pointerType;
     if (type === 'pen') penAt = Date.now();
     if (e.target.closest('.sel-box, .sel-bar')) return;
+    if (T.tool === 'text' && type !== 'touch') { onTextDown(e); return; }
     const drawTouch = type === 'touch' && T.fingerDraw && !pinch && Date.now() - penAt > 600;
     if (type === 'touch' && !drawTouch) {
       tapTouch = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
@@ -623,6 +781,23 @@ export async function openEditor(root, notebookId, { onExit }) {
     liveSoon();
   }
 
+  // Tekst: klik in een bestaand vak = typen (de browser regelt de cursor); klik ernaast = nieuw vak bij het loslaten
+  let textDown = null;
+  function onTextDown(e) {
+    if (textAt(e.target)) return;
+    const pageEl = e.target.closest('.page');
+    if (!pageEl) { tedit?.el.blur(); return; }
+    e.preventDefault();
+    tedit?.el.blur();
+    textDown = { id: e.pointerId, pg: byId(pageEl.dataset.id), x: e.clientX, y: e.clientY };
+  }
+  function onTextUp(e) {
+    const d = textDown;
+    textDown = null;
+    if (!d || e.type !== 'pointerup' || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 12) return;
+    newText(d.pg, ...toUnit(e, S.get(d.pg.id)));
+  }
+
   function onMove(e) {
     if (tapTouch && e.pointerId === tapTouch.id && Math.hypot(e.clientX - tapTouch.x, e.clientY - tapTouch.y) > 10) tapTouch = null;
     if (!active || e.pointerId !== active.id) return;
@@ -651,6 +826,7 @@ export async function openEditor(root, notebookId, { onExit }) {
   }
 
   function onUp(e) {
+    if (textDown && e.pointerId === textDown.id) return onTextUp(e);
     if (tapTouch && e.pointerId === tapTouch.id) {
       const t = tapTouch;
       tapTouch = null;
@@ -659,6 +835,7 @@ export async function openEditor(root, notebookId, { onExit }) {
         const pg = pageEl && byId(pageEl.dataset.id);
         if (pg && player.open) seekAt(pg, ...toUnit(e, S.get(pg.id)));
         else if (pg && T.tool === 'lasso') { const im = imageAt(pg, ...toUnit(e, S.get(pg.id))); if (im) selectImage(pg, im); else clearImageSel(); }
+        else if (pg && T.tool === 'text' && !textAt(document.elementFromPoint(e.clientX, e.clientY))) newText(pg, ...toUnit(e, S.get(pg.id)));
       }
       return;
     }
@@ -729,8 +906,11 @@ export async function openEditor(root, notebookId, { onExit }) {
   const isPalm = t => Date.now() - penAt < 450 || ((t.radiusX || 0) > 45 && Date.now() - penAt < 3000);
   // Knoppenbalk van een selectie: touch niet blokkeren, anders stuurt iOS geen 'click' (Wis/Kopie/Kleur deden dan niets)
   const onSelBar = e => !!e.target.closest?.('.sel-bar');
+  let touchAt = 0;
   function onTouchStart(e) {
+    touchAt = Date.now();
     if (onSelBar(e)) return;
+    if (T.tool === 'text' && textAt(e.target)) return; // in een tekstvak tikken = typen
     const all = [...e.touches];
     if (all.some(isStylus)) { e.preventDefault(); return; }
     if (e.target.closest('.sel-box')) { e.preventDefault(); return; }
@@ -813,9 +993,9 @@ export async function openEditor(root, notebookId, { onExit }) {
     const z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, pinch.z0 * d / pinch.d0));
     setView(pinch.wx - (c[0] - r.left) / z, pinch.wy - (c[1] - r.top) / z, z);
   }
-  function startPinch(ts) {
-    const c = centroid(ts);
-    const d = Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY) || 1;
+  function startPinch(ts) { startZoomAt(centroid(ts), Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY) || 1); }
+  // Notitieboek: tijdens het zoomen alleen een css-schaal, bij het loslaten (endPinch) opnieuw opbouwen
+  function startZoomAt(c, d = 1) {
     // ankerpunt: pagina + positie onder het midden van de vingers
     let anchor = null, best = Infinity;
     for (const pg of pages) {
@@ -826,6 +1006,37 @@ export async function openEditor(root, notebookId, { onExit }) {
     const pr = pagesEl.getBoundingClientRect();
     pagesEl.style.transformOrigin = `${c[0] - pr.left}px ${c[1] - pr.top}px`;
     pinch = { c0: c, c, d0: d, z0: zoom, k: 1, anchor };
+  }
+  function setPinchZoom(z) {
+    pinch.k = Math.min(3, Math.max(0.5, z)) / pinch.z0;
+    pagesEl.style.transform = `translate(${pinch.c[0] - pinch.c0[0]}px, ${pinch.c[1] - pinch.c0[1]}px) scale(${pinch.k})`;
+  }
+  // Laptop: knijpen op het trackpad of Ctrl/⌘ + scrollen (Chrome/Edge sturen dat als 'wheel' met ctrlKey)
+  let wheelEnd = 0;
+  if (!board) scrollEl.addEventListener('wheel', e => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    if (!pinch) startZoomAt([e.clientX, e.clientY]);
+    setPinchZoom(pinch.z0 * pinch.k * Math.exp(-e.deltaY * 0.01));
+    clearTimeout(wheelEnd);
+    wheelEnd = setTimeout(() => { if (pinch) endPinch(); }, 200);
+  }, { passive: false });
+  // Safari op de Mac stuurt knijpen als 'gesture'-events (op de iPad doen de touch-events het al)
+  let gz = null;
+  ed.addEventListener('gesturestart', e => { if (gesture || pinch || Date.now() - touchAt < 1000) return; gz = { z: board ? view.z : zoom }; if (!board) startZoomAt([e.clientX, e.clientY]); });
+  ed.addEventListener('gesturechange', e => {
+    if (!gz) return;
+    if (board) zoomAt(e.clientX, e.clientY, gz.z * e.scale);
+    else if (pinch) setPinchZoom(gz.z * e.scale);
+  });
+  ed.addEventListener('gestureend', () => { if (gz && !board && pinch) endPinch(); gz = null; });
+  // Toetsen ⌘+ / ⌘- / ⌘0 (midden van het scherm)
+  function zoomStep(f) {
+    const r = scrollEl.getBoundingClientRect(), c = [r.left + r.width / 2, r.top + r.height / 2];
+    if (board) return zoomAt(c[0], c[1], f ? view.z * f : 1);
+    startZoomAt(c);
+    setPinchZoom(f ? zoom * f : 1);
+    endPinch();
   }
   function updatePinch(ts) {
     const c = centroid(ts);
@@ -1314,6 +1525,7 @@ export async function openEditor(root, notebookId, { onExit }) {
     ctx.setTransform(k, 0, 0, k, 0, 0);
     drawPaper(ctx, pg.paper);
     await drawImagesOn(ctx, pg);
+    drawTextsOn(ctx, pg);
     drawStrokes(ctx, pg.strokes);
     const blob = await new Promise(r => c.toBlob(r, 'image/png'));
     saveFile(blob, `${(nb.title || 'notitie').replace(/[\\/:*?"<>|]/g, '-')} - p${i + 1}.png`);
@@ -1506,7 +1718,11 @@ export async function openEditor(root, notebookId, { onExit }) {
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
     if (mod && e.key.toLowerCase() === 'c' && sel) { e.preventDefault(); selCopy(); return; }
     if (mod && e.key.toLowerCase() === 'v' && inkClip) { e.preventDefault(); pasteInk(); return; }
-    const map = { p: 'pen', h: 'hl', e: 'eraser', l: 'lasso' };
+    if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoomStep(1.25); return; }
+    if (mod && e.key === '-') { e.preventDefault(); zoomStep(0.8); return; }
+    if (mod && e.key === '0') { e.preventDefault(); zoomStep(0); return; }
+    if (!board && !mod && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) { e.preventDefault(); goToPage(navBase() + (e.key === 'ArrowRight' ? 1 : -1)); return; }
+    const map = { p: 'pen', h: 'hl', e: 'eraser', l: 'lasso', t: 'text' };
     if (!mod && map[e.key]) setTool(map[e.key]);
     if (e.key === 'Escape') { clearSelection(); clearImageSel(); }
     if ((e.key === 'Backspace' || e.key === 'Delete') && sel) selDelete();
@@ -1527,18 +1743,20 @@ export async function openEditor(root, notebookId, { onExit }) {
     if (rec) await stopRecording();
     player.audio.pause();
     if (player.url) URL.revokeObjectURL(player.url);
+    tedit?.el.blur();
     clearSelection();
     clearImageSel();
     await saveSoon.flush();
     try {
       if (board) nb.thumb = renderFit(pages[0].strokes, 240, 339, 0.08).toDataURL('image/jpeg', 0.75);
-      else if (pages[0].images?.length) {
+      else if (pages[0].images?.length || pages[0].texts?.length) {
         const c = document.createElement('canvas'), k = 240 / PAGE_W;
         c.width = 240; c.height = Math.round(PAGE_H * k);
         const ctx = c.getContext('2d');
         ctx.setTransform(k, 0, 0, k, 0, 0);
         drawPaper(ctx, pages[0].paper);
         await drawImagesOn(ctx, pages[0]);
+        drawTextsOn(ctx, pages[0]);
         drawStrokes(ctx, pages[0].strokes);
         nb.thumb = c.toDataURL('image/jpeg', 0.75);
       } else nb.thumb = thumbnail(pages[0]);
@@ -1546,6 +1764,7 @@ export async function openEditor(root, notebookId, { onExit }) {
     for (const u of assetUrls.values()) u.then(x => x && URL.revokeObjectURL(x));
     if (board) nb.view = { ...view };
     nb.pageCount = pages.length;
+    nb.text = pages.flatMap(p => (p.texts || []).map(t => t.t)).join(' ').slice(0, 20000); // voor Zoeken
     await db.put('notebooks', nb);
     for (const st of S.values()) if (st.canvas) st.canvas.width = st.canvas.height = 0;
   }

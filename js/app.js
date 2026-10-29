@@ -1,7 +1,7 @@
 // Router en opstarten.
 import { requestPersistence, RUNTIME } from './db.js';
 import { toast, closePopovers } from './util.js';
-import { dashboard, subjectView, summaryView, practiceView, settingsView, planningView } from './views.js';
+import { dashboard, subjectView, summaryView, practiceView, settingsView, planningView, openSearch } from './views.js';
 import { openEditor } from './editor.js';
 import { catchUp } from './planner.js';
 import { autoDone } from './plansets.js';
@@ -59,6 +59,18 @@ window.addEventListener('hashchange', route);
 // iOS: voorkom dat de hele app inzoomt met knijpen (de editor heeft eigen zoom)
 document.addEventListener('gesturestart', e => e.preventDefault());
 document.addEventListener('dblclick', e => e.preventDefault());
+
+// Laptop: naam van een knop als tooltip (uit aria-label) zodra de muis erboven hangt
+document.addEventListener('pointerover', e => {
+  if (e.pointerType !== 'mouse') return;
+  const b = e.target.closest?.('[aria-label]');
+  if (b && !b.title) b.title = b.getAttribute('aria-label');
+});
+// ⌘K of / = zoeken
+document.addEventListener('keydown', e => {
+  if (e.target.matches?.('input, textarea, [contenteditable]') || document.querySelector('.modal')) return;
+  if (((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') || (e.key === '/' && !e.metaKey && !e.ctrlKey)) { e.preventDefault(); openSearch(); }
+});
 
 route();
 requestPersistence();

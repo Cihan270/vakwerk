@@ -101,3 +101,5 @@ zet samenhangende begrippen dus bij elkaar. Houd definities kort: een **vetgedru
 - Bij een release: verhoog `VERSION` in `sw.js`, anders krijgt de iPad de nieuwe versie niet.
 - Opbouw: `js/app.js` (router), `js/views.js` (schermen), `js/editor.js` (inkt-editor), `js/ink.js` (tekenen/geometrie/gebaren), `js/db.js` (IndexedDB), `js/pack.js` (import/back-up), `js/pdf.js` (slides importeren via pdf.js van cdnjs, alleen bij importeren online), `js/srs.js` (spaced repetition), `js/keyterms.js` (begrippen-check bij Oefenen › Typen: kernbegrippen = andere kaartvoorkanten van het vak die in het antwoord staan, plus afkortingen), `js/markdown.js`.
 - Afbeeldingen en slides: `page.images = [{ id, asset, x, y, w, h, lock? }]` in pagina-eenheden; de blob staat in store `assets` (per notitie). `lock` = slide, niet verschuifbaar.
+- Getypte tekst: `page.texts = [{ id, x, y, w, t, s, c }]` in pagina-eenheden (s = lettergrootte; 22 past op het lijntjespapier). Als `<textarea>` boven de inkt; `notebook.text` = alle tekst voor Zoeken.
+- Laptop: Ctrl/⌘ + scrollen of knijpen op het trackpad zoomt, ⌘+/⌘-/⌘0, ←/→ = vorige/volgende pagina, T = tekst, ⌘K of / = zoeken.

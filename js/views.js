@@ -1000,7 +1000,7 @@ export async function practiceView(root, scope, query = '') {
           <section><h4>Modelantwoord</h4>${model}</section>
         </div>
       </div>
-      <div class="grades">${GRADES.map(g => `<button class="grade ${g.cls} ${g.key === advice ? 'suggest' : ''}" data-g="${g.key}"><b>${g.label}</b><small>${g.key === advice ? 'advies' : cram && g.key ? '' : intervalLabel(c.srs, g.key)}</small></button>`).join('')}</div>`;
+      <div class="grades">${GRADES.map(g => `<button class="grade ${g.cls} ${g.key === advice ? 'suggest' : ''}" data-g="${g.key}" title="Toets ${g.key + 1}"><b>${g.label}</b><small>${g.key === advice ? 'advies' : cram && g.key ? '' : intervalLabel(c.srs, g.key)}</small></button>`).join('')}</div>`;
   }
 
   // Schrijven: antwoord met de Pencil in een inktvak, daarna naast het modelantwoord en zelf beoordelen
@@ -1030,7 +1030,7 @@ export async function practiceView(root, scope, query = '') {
         </div>
         <p class="muted small">Vergelijk zelf: heb je de kern en de vakbegrippen? Kies dan hoe goed het ging.</p>
       </div>
-      <div class="grades">${GRADES.map(g => `<button class="grade ${g.cls}" data-g="${g.key}"><b>${g.label}</b><small>${cram && g.key ? '' : intervalLabel(c.srs, g.key)}</small></button>`).join('')}</div>`;
+      <div class="grades">${GRADES.map(g => `<button class="grade ${g.cls}" data-g="${g.key}" title="Toets ${g.key + 1}"><b>${g.label}</b><small>${cram && g.key ? '' : intervalLabel(c.srs, g.key)}</small></button>`).join('')}</div>`;
   }
   // Tekenen in css-pixels; zodra de Pencil gebruikt is tekent een vinger niet meer (handpalm)
   function mountPad(cv) {
@@ -1164,7 +1164,7 @@ export async function practiceView(root, scope, query = '') {
         ${rev ? `<span class="flash-front long md">${markdown(c.back)}</span>` : `<span class="flash-front ${frontCls(c)}">${esc(c.front)}</span>`}
         ${flipped ? (rev ? `<span class="flash-back flash-answer">${esc(c.front)}</span>` : `<span class="flash-back md">${markdown(c.back)}</span>`) : '<span class="flash-hint">Tik om het antwoord te zien</span>'}
       </button>
-      <div class="grades">${flipped ? GRADES.map(g => `<button class="grade ${g.cls}" data-g="${g.key}"><b>${g.label}</b><small>${cram && g.key ? '' : intervalLabel(c.srs, g.key)}</small></button>`).join('') : `<button class="btn primary block" data-a="flip">Toon antwoord</button>`}</div>
+      <div class="grades">${flipped ? GRADES.map(g => `<button class="grade ${g.cls}" data-g="${g.key}" title="Toets ${g.key + 1}"><b>${g.label}</b><small>${cram && g.key ? '' : intervalLabel(c.srs, g.key)}</small></button>`).join('') : `<button class="btn primary block" data-a="flip" title="Spatie of Enter">Toon antwoord</button>`}</div>
     </div>`;
   }
   async function grade(g) {
@@ -1215,7 +1215,7 @@ export async function practiceView(root, scope, query = '') {
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); check(queue[0], reversed(queue[0])); }
       return;
     }
-    if (e.key === ' ') { e.preventDefault(); if (!flipped) { if (mode === 'type') check(queue[0], reversed(queue[0])); else if (mode === 'ink') inkReveal(); else { flipped = true; draw(); } } }
+    if (e.key === ' ' || (e.key === 'Enter' && !flipped)) { e.preventDefault(); if (!flipped) { if (mode === 'type') check(queue[0], reversed(queue[0])); else if (mode === 'ink') inkReveal(); else { flipped = true; draw(); } } }
     if (flipped && '1234'.includes(e.key)) grade(+e.key - 1);
   };
   document.addEventListener('keydown', key);
@@ -1352,7 +1352,7 @@ export async function openSearch() {
   const D = await loadAll();
   const idx = [
     ...D.subjects.map(s => ({ t: 'Vak', title: s.name, text: (s.aliases || []).join(' '), href: '#/vak/' + s.id, c: s.color })),
-    ...D.notebooks.map(n => ({ t: n.kind === 'summary' ? 'Handgeschreven' : 'Notitie', title: n.title, text: '', href: '#/notitie/' + n.id, c: D.sub[n.subjectId]?.color, sub: D.sub[n.subjectId]?.name })),
+    ...D.notebooks.map(n => ({ t: n.kind === 'summary' ? 'Handgeschreven' : 'Notitie', title: n.title, text: n.text || '', href: '#/notitie/' + n.id, c: D.sub[n.subjectId]?.color, sub: D.sub[n.subjectId]?.name })),
     ...D.summaries.map(x => ({ t: 'Samenvatting', title: x.title, text: plainText(x.markdown) + ' ' + (x.terms || []).map(t => t.term + ' ' + t.definition).join(' '), href: '#/samenvatting/' + x.id, c: D.sub[x.subjectId]?.color, sub: D.sub[x.subjectId]?.name })),
     ...D.cards.map(c => ({ t: c.kind === 'vraag' ? 'Oefenvraag' : 'Begrip', title: c.front, text: c.back, href: c.summaryId ? '#/samenvatting/' + c.summaryId + (c.kind === 'vraag' ? '/vragen' : '/begrippen') : `#/vak/${c.subjectId}/oefenen`, c: D.sub[c.subjectId]?.color, sub: D.sub[c.subjectId]?.name })),
     ...D.assignments.map(a => ({ t: 'Opdracht', title: a.title, text: a.notes || '', href: `#/vak/${a.subjectId}/opdrachten`, c: D.sub[a.subjectId]?.color, sub: D.sub[a.subjectId]?.name })),
