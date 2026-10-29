@@ -324,6 +324,7 @@ export async function dashboard(root) {
     if (!s) return '';
     const sumToday = D.summaries.find(x => x.subjectId === s.id && x.date === isoDay(upcoming.date));
     return `<section class="hero" style="--c:${s.color}">
+      <span class="hero-ic">${icon('calendar', 22)}</span>
       <div class="hero-main">
         <span class="hero-when">${whenLabel(upcoming)}</span>
         <h2>${esc(s.name)}</h2>
@@ -355,27 +356,44 @@ export async function dashboard(root) {
       <div><h1>${greeting(now)}${name ? ', ' + esc(name) : ''}</h1><p class="muted">${fmtLongDate(now)} · week ${weekNumber(now)}</p></div>
       <div class="actions">
         <button class="icon-btn" data-a="search" aria-label="Zoeken">${icon('search')}</button>
+        <button class="icon-btn" data-a="import" aria-label="Importeer pakket">${icon('import')}</button>
         <button class="btn" data-a="planning">${icon('list', 18)} Planning</button>
-        <button class="btn" data-a="import">${icon('import', 18)} Importeer</button>
         <button class="icon-btn" data-a="settings" aria-label="Instellingen">${icon('settings')}</button>
       </div>
     </header>
     ${D.subjects.some(isDemoSubject) ? `<div class="demo-banner">${icon('sparkle', 18)}<span>Je kijkt naar <b>voorbeelddata</b>. Klaar met rondkijken?</span><button class="btn small" data-a="removedemo">Voorbeelddata verwijderen</button></div>` : ''}
+    <nav class="subject-strip" aria-label="Vakken">
+      ${D.subjects.map(s => {
+        const nx = nextOccurrences(D.slots.filter(x => x.subjectId === s.id), now, 1)[0];
+        const ex = D.plan.find(p => p.kind === 'exam' && p.subjectId === s.id && p.date >= isoDay(now));
+        const n = ex ? daysUntil(ex.date) : 0;
+        const sub = ex ? `<span class="exam-inline">${icon('flag', 12)} ${n === 0 ? 'Tentamen vandaag' : n === 1 ? 'Tentamen morgen' : `Tentamen over ${n} d`}</span>`
+          : nx ? whenLabel(nx) : `${D.notebooks.filter(x => x.subjectId === s.id).length} notities · ${D.summaries.filter(x => x.subjectId === s.id).length} samenv.`;
+        return `<button class="subject-chip" data-sub="${s.id}" style="--c:${s.color}">
+          <span class="sc-band"></span>
+          <span class="sc-body"><b>${esc(s.name)}</b><small>${sub}</small></span>
+          ${dueBySub[s.id] ? `<span class="sc-due" title="${dueBySub[s.id]} kaarten te herhalen">${dueBySub[s.id]}</span>` : ''}
+        </button>`;
+      }).join('')}
+      <button class="subject-chip add" data-a="addsubject" aria-label="Vak toevoegen">${icon('plus', 20)}</button>
+    </nav>
     ${hero}
     ${examCards(D)}
     <div class="dash-grid">
-      ${showRooster ? roosterCard() : planCard}
       <div class="col">
-        ${showRooster ? planCard : ''}
+        ${planCard}
+        ${showRooster || !planCard ? roosterCard() : ''}
+      </div>
+      <div class="col">
         <section class="card">
           <div class="card-h"><h3>${icon('task', 18)} Deadlines</h3><button class="link" data-a="addtask">+ Opdracht</button></div>
           ${openTasks.length ? `<div class="tasks">${openTasks.slice(0, 6).map(t => taskRow(t, D.sub[t.subjectId], true)).join('')}</div>` : '<p class="empty small">Geen openstaande opdrachten 🎉</p>'}
         </section>
         <section class="card review ${due.length ? '' : 'quiet'}">
           <div class="card-h"><h3>${icon('cards', 18)} Herhalen</h3></div>
-          ${due.length ? `<p class="big-num">${due.length}<small> kaart${due.length > 1 ? 'en' : ''} klaar om te herhalen</small></p>
-            <div class="chips">${Object.entries(dueBySub).map(([id, n]) => D.sub[id] ? `<a class="chip" href="#/oefenen/${id}" style="--c:${D.sub[id].color}">${esc(D.sub[id].name)} · ${n}</a>` : '').join('')}</div>
-            <button class="btn primary block" data-a="review">Start herhalen</button>`
+          ${due.length ? `<div class="review-row"><p class="big-num">${due.length}<small> kaart${due.length > 1 ? 'en' : ''} klaar</small></p>
+              <button class="btn primary" data-a="review">${icon('cards', 18)} Start herhalen</button></div>
+            <div class="chips">${Object.entries(dueBySub).map(([id, n]) => D.sub[id] ? `<a class="chip" href="#/oefenen/${id}" style="--c:${D.sub[id].color}">${esc(D.sub[id].name)} · ${n}</a>` : '').join('')}</div>`
             : `<p class="empty small">Alles herhaald voor vandaag. ${D.cards.length ? '' : 'Begrippen en oefenvragen uit je samenvattingen komen hier vanzelf.'}</p>`}
         </section>
         ${study.length ? `<section class="card">
@@ -387,27 +405,6 @@ export async function dashboard(root) {
         </section>` : ''}
       </div>
     </div>
-    <section class="subjects-sec">
-      <div class="sec-h"><h3>Vakken</h3></div>
-      <div class="subject-grid">
-        ${D.subjects.map(s => {
-          const nNotes = D.notebooks.filter(n => n.subjectId === s.id).length;
-          const nSum = D.summaries.filter(n => n.subjectId === s.id).length;
-          const nTask = D.assignments.filter(a => a.subjectId === s.id && !a.done).length;
-          const nx = nextOccurrences(D.slots.filter(x => x.subjectId === s.id), now, 1)[0];
-          return `<button class="subject-tile" data-sub="${s.id}" style="--c:${s.color}">
-            <span class="tile-band"></span>
-            <b>${esc(s.name)}</b>
-            <small>${nx ? whenLabel(nx) : 'Niet in rooster'}</small>
-            <span class="tile-stats">
-              <span>${icon('pen', 14)} ${nNotes}</span><span>${icon('doc', 14)} ${nSum}</span>
-              ${nTask ? `<span>${icon('task', 14)} ${nTask}</span>` : ''}${dueBySub[s.id] ? `<span class="hot">${icon('cards', 14)} ${dueBySub[s.id]}</span>` : ''}
-            </span>
-          </button>`;
-        }).join('')}
-        <button class="subject-tile add" data-a="addsubject">${icon('plus', 26)}<b>Vak toevoegen</b></button>
-      </div>
-    </section>
   </div>`;
 
   root.onclick = async e => {
@@ -585,6 +582,7 @@ export async function subjectView(root, id, tab = 'notities') {
       }
     }
   };
+  $('.all-cards', root)?.addEventListener('toggle', e => { allCardsOpen = e.target.open; });
   const filter = $('.card-filter', root);
   if (filter) filter.addEventListener('input', () => {
     const q = filter.value.toLowerCase();
@@ -602,11 +600,12 @@ function notebookCard(n) {
 
 function notesTab(list) {
   list.sort((a, b) => (b.updated || 0) - (a.updated || 0));
-  return `<div class="nb-grid">
-    <button class="nb-card new" data-a="newnote"><div class="nb-thumb">${icon('plus', 34)}</div><div class="nb-meta"><b>Nieuwe notitie</b><small>Schrijf met je Pencil</small></div></button>
-    <button class="nb-card new" data-a="importpdf"><div class="nb-thumb">${icon('slides', 34)}</div><div class="nb-meta"><b>Slides importeren</b><small>PDF uit Bestanden of Canvas</small></div></button>
-    ${list.map(notebookCard).join('')}
-  </div>${list.length ? '' : '<p class="empty">Nog geen aantekeningen. Tik op "Nieuwe notitie" om te beginnen. Tip: druk op de microfoon om het college op te nemen terwijl je schrijft.</p>'}`;
+  return `<div class="row gap wrap">
+      <button class="btn primary" data-a="newnote">${icon('pen', 18)} Nieuwe notitie</button>
+      <button class="btn" data-a="importpdf">${icon('slides', 18)} Slides importeren</button>
+    </div>
+    ${list.length ? `<div class="nb-grid">${list.map(notebookCard).join('')}</div>`
+      : '<p class="empty">Nog geen aantekeningen. Tik op "Nieuwe notitie" om te beginnen. Tip: druk op de microfoon om het college op te nemen terwijl je schrijft.</p>'}`;
 }
 
 function summariesTab(sums, hand) {
@@ -645,6 +644,7 @@ const PRACTICE_MODES = [
   { v: 'ink', label: 'Schrijven' }, // met de Pencil in een inktvak; handig voor formules (geen automatische check)
 ];
 const PRACTICE_CHUNKS = [5, 10, 0]; // kaarten per ronde; 0 = alles in één keer
+let allCardsOpen = false; // "Alle kaarten" blijft open na opnieuw tekenen
 
 // Tekst met gemarkeerde stukken (spans: { start, end, hit })
 function markText(text, spans) {
@@ -674,24 +674,22 @@ function practiceTab(cards, s, summaries = [], dir = 'normal', mode = 'flip', ch
   const fresh = cards.filter(isNew).length;
   const weak = cards.filter(isWeak).length;
   const sets = deckSets(cards, summaries);
-  return `<div class="stats">
-      <div class="stat"><b>${due}</b><small>te herhalen</small></div>
-      <div class="stat"><b>${fresh}</b><small>nieuw</small></div>
-      <div class="stat"><b>${cards.length}</b><small>totaal</small></div>
-    </div>
-    <div class="row gap wrap practice-dir"><span class="muted small">Vraag:</span>
-      <div class="seg small">${PRACTICE_DIRS.map(d => `<button class="pill ${d.v === dir ? 'on' : ''}" data-a="dir" data-dir="${d.v}">${d.label}</button>`).join('')}</div>
-      <span class="muted small">Antwoord:</span>
-      <div class="seg small">${PRACTICE_MODES.map(m => `<button class="pill ${m.v === mode ? 'on' : ''}" data-a="mode" data-mode="${m.v}">${m.label}</button>`).join('')}</div>
-      <span class="muted small">Per ronde:</span>
-      <div class="seg small">${PRACTICE_CHUNKS.map(n => `<button class="pill ${n === chunk ? 'on' : ''}" data-a="chunk" data-chunk="${n}">${n || 'Alles'}</button>`).join('')}</div>
-    </div>
-    <div class="row gap wrap">
-      <button class="btn primary" data-a="review" ${due ? '' : 'disabled'}>${icon('cards', 18)} Start herhalen</button>
-      <button class="btn" data-a="cram" ${cards.length ? '' : 'disabled'}>Alles door elkaar</button>
-      <button class="btn ${weak ? 'weak-btn' : ''}" data-a="weak" ${weak ? '' : 'disabled'}>Foute kaarten${weak ? ` (${weak})` : ''}</button>
-      <button class="btn ghost" data-a="newcard">${icon('plus', 18)} Kaart maken</button>
-      ${cards.length ? `<button class="btn ghost danger" data-a="delcards">${icon('trash', 18)} Alle kaarten verwijderen</button>` : ''}
+  return `<section class="practice-head">
+      <div class="stats">
+        <div class="stat"><b>${due}</b><small>te herhalen</small></div>
+        <div class="stat"><b>${fresh}</b><small>nieuw</small></div>
+        <div class="stat"><b>${cards.length}</b><small>totaal</small></div>
+      </div>
+      <div class="practice-go">
+        <button class="btn primary" data-a="review" ${due ? '' : 'disabled'}>${icon('cards', 18)} Start herhalen</button>
+        <button class="btn" data-a="cram" ${cards.length ? '' : 'disabled'}>Alles door elkaar</button>
+        <button class="btn ${weak ? 'weak-btn' : ''}" data-a="weak" ${weak ? '' : 'disabled'}>Foute kaarten${weak ? ` (${weak})` : ''}</button>
+      </div>
+    </section>
+    <div class="practice-opts">
+      <div><span>Vraag</span><div class="seg small">${PRACTICE_DIRS.map(d => `<button class="pill ${d.v === dir ? 'on' : ''}" data-a="dir" data-dir="${d.v}">${d.label}</button>`).join('')}</div></div>
+      <div><span>Antwoord</span><div class="seg small">${PRACTICE_MODES.map(m => `<button class="pill ${m.v === mode ? 'on' : ''}" data-a="mode" data-mode="${m.v}">${m.label}</button>`).join('')}</div></div>
+      <div><span>Per ronde</span><div class="seg small">${PRACTICE_CHUNKS.map(n => `<button class="pill ${n === chunk ? 'on' : ''}" data-a="chunk" data-chunk="${n}">${n || 'Alles'}</button>`).join('')}</div></div>
     </div>
     ${cards.length ? `<h3 class="sec-title">Per set leren</h3>
     <div class="deck-list">${sets.map(d => {
@@ -705,12 +703,18 @@ function practiceTab(cards, s, summaries = [], dir = 'normal', mode = 'flip', ch
         ${w ? `<button class="pill deck-weak" data-a="setweak" data-set="${esc(d.key)}" aria-label="Foute kaarten van deze set oefenen">${w} fout ›</button>` : ''}
       </div>`;
     }).join('')}</div>` : ''}
-    ${cards.length ? `<input class="input card-filter" type="search" placeholder="Zoek in kaarten…">
+    ${cards.length ? `<details class="all-cards" ${allCardsOpen ? 'open' : ''}><summary><h3>Alle kaarten <span class="muted">(${cards.length})</span></h3></summary>
+    <div class="row gap wrap all-cards-bar">
+      <input class="input card-filter" type="search" placeholder="Zoek in kaarten…">
+      <button class="btn ghost" data-a="newcard">${icon('plus', 18)} Kaart maken</button>
+      <button class="btn ghost danger" data-a="delcards">${icon('trash', 18)} Alles verwijderen</button>
+    </div>
     <div class="card-list">${cards.sort((a, b) => a.front.localeCompare(b.front)).map(c => `<button class="card-row" data-card="${c.id}">
       <span class="tag ${c.kind === 'vraag' ? 'q' : c.kind === 'begrip' ? 'ai' : ''}">${c.kind === 'vraag' ? 'Vraag' : c.kind === 'begrip' ? 'Begrip' : 'Eigen'}</span>
       <b>${esc(c.front)}</b><small>${esc(plainText(c.back))}</small>
       <em>${isWeak(c) ? '<span class="weak-txt">fout</span>' : isDue(c) ? 'nu' : fmtDate(c.srs.due)}</em>
-    </button>`).join('')}</div>` : '<p class="empty">Nog geen kaarten. Begrippen en oefenvragen uit geïmporteerde samenvattingen worden automatisch flashcards. Je kunt ook zelf kaarten maken.</p>'}`;
+    </button>`).join('')}</div></details>` : `<p class="empty">Nog geen kaarten. Begrippen en oefenvragen uit geïmporteerde samenvattingen worden automatisch flashcards.</p>
+    <div class="center"><button class="btn" data-a="newcard">${icon('plus', 18)} Kaart maken</button></div>`}`;
 }
 
 async function notebookMenu(anchor, id, done) {
