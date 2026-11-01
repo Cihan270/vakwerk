@@ -192,8 +192,25 @@ function backend() {
 export const ready = () => backend();
 export async function rawStore() { const b = await backend(); return b.raw || null; }
 
+// Felle vakkleuren van vroeger worden bij het lezen aardetinten, zo gaan bestaande vakken en pakketten vanzelf mee
+const SOFT_COLORS = { '#4f6bed': '#b5654a', '#e5484d': '#a8473f', '#12a594': '#7c8455', '#f5a524': '#c2974b', '#8e4ec6': '#8a6a7c', '#e54d9a': '#b27a80', '#0090ff': '#6d7f8a', '#46a758': '#5f7a5a', '#d6672e': '#c07c4f', '#5b6b7f': '#7d7468' };
+const SOFT_SET = new Set(Object.values(SOFT_COLORS));
+function softColor(c) {
+  const k = String(c || '').toLowerCase();
+  if (SOFT_COLORS[k]) return SOFT_COLORS[k];
+  if (SOFT_SET.has(k) || !/^#[0-9a-f]{6}$/.test(k)) return c;
+  // Eigen kleur uit een pakket: mengen met taupe
+  const mix = (i, t) => Math.round(parseInt(k.substr(i, 2), 16) * 0.6 + t * 0.4).toString(16).padStart(2, '0');
+  return '#' + mix(1, 0x8a) + mix(3, 0x7a) + mix(5, 0x68);
+}
+const softSubject = s => (s ? { ...s, color: softColor(s.color) } : s);
+
 export const db = Object.fromEntries(['get', 'all', 'by', 'put', 'putMany', 'del', 'delMany', 'clear']
-  .map(m => [m, async (...a) => (await backend())[m](...a)]));
+  .map(m => [m, async (...a) => {
+    const r = await (await backend())[m](...a);
+    if (a[0] !== 'subjects' || !['get', 'all', 'by'].includes(m)) return r;
+    return Array.isArray(r) ? r.map(softSubject) : softSubject(r);
+  }]));
 
 export async function getSetting(key, def) {
   const r = await db.get('meta', key);

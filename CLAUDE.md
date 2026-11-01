@@ -103,4 +103,6 @@ zet samenhangende begrippen dus bij elkaar. Houd definities kort: een **vetgedru
 - Afbeeldingen en slides: `page.images = [{ id, asset, x, y, w, h, lock? }]` in pagina-eenheden; de blob staat in store `assets` (per notitie). `lock` = slide, niet verschuifbaar.
 - Getypte tekst: `page.texts = [{ id, x, y, w, t, s, c }]` in pagina-eenheden (s = lettergrootte; 22 past op het lijntjespapier). Als `<textarea>` boven de inkt; `notebook.text` = alle tekst voor Zoeken.
 - Lasso: selecteert inkt én getypte tekst (`sel.ids` + `sel.tids`). Slepen kan naar een andere pagina (`dropSelection`, scrolt mee bij de rand), de hoekgreep schaalt (`startSelResize`). Wijzigingen op meerdere pagina's zijn één stap ongedaan maken (`pushUndoOps`).
+- Stijl: beige achtergrond, witte kaarten, bruine knoppen, zwarte tekst, koppen in Fraunces (`fonts/`, SIL OFL). Vakkleuren zijn aardetinten als klein stipje; oude felle kleuren worden bij het lezen omgezet (`softColor` in `js/db.js`).
+- Thema: de app is altijd licht (`data-theme="light"` op `<html>` in index.html), ook als de iPad op donker staat. Donker papier in de editor is een eigen instelling (`T.dark`).
 - Laptop: Ctrl/⌘ + scrollen of knijpen op het trackpad zoomt, ⌘+/⌘-/⌘0, ←/→ = vorige/volgende pagina, T = tekst, ⌘K of / = zoeken.

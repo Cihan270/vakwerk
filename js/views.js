@@ -324,15 +324,14 @@ export async function dashboard(root) {
     if (!s) return '';
     const sumToday = D.summaries.find(x => x.subjectId === s.id && x.date === isoDay(upcoming.date));
     return `<section class="hero" style="--c:${s.color}">
-      <span class="hero-ic">${icon('calendar', 22)}</span>
       <div class="hero-main">
         <span class="hero-when">${whenLabel(upcoming)}</span>
         <h2>${esc(s.name)}</h2>
         <p>${esc(upcoming.slot.kind || '')}${upcoming.slot.location ? ' · ' + esc(upcoming.slot.location) : ''} · ${upcoming.slot.start}–${upcoming.slot.end}</p>
       </div>
       <div class="hero-actions">
-        <button class="btn white" data-note="${s.id}">${icon('pen', 18)} Nieuwe notitie</button>
-        ${sumToday ? `<button class="btn white ghost" data-sum="${sumToday.id}">${icon('doc', 18)} Samenvatting</button>` : ''}
+        <button class="btn white" data-note="${s.id}">Nieuwe notitie</button>
+        ${sumToday ? `<button class="btn white ghost" data-sum="${sumToday.id}">Samenvatting</button>` : ''}
         <button class="btn white ghost" data-sub="${s.id}">Open vak</button>
       </div>
     </section>`;
@@ -363,18 +362,10 @@ export async function dashboard(root) {
     </header>
     ${D.subjects.some(isDemoSubject) ? `<div class="demo-banner">${icon('sparkle', 18)}<span>Je kijkt naar <b>voorbeelddata</b>. Klaar met rondkijken?</span><button class="btn small" data-a="removedemo">Voorbeelddata verwijderen</button></div>` : ''}
     <nav class="subject-strip" aria-label="Vakken">
-      ${D.subjects.map(s => {
-        const nx = nextOccurrences(D.slots.filter(x => x.subjectId === s.id), now, 1)[0];
-        const ex = D.plan.find(p => p.kind === 'exam' && p.subjectId === s.id && p.date >= isoDay(now));
-        const n = ex ? daysUntil(ex.date) : 0;
-        const sub = ex ? `<span class="exam-inline">${icon('flag', 12)} ${n === 0 ? 'Tentamen vandaag' : n === 1 ? 'Tentamen morgen' : `Tentamen over ${n} d`}</span>`
-          : nx ? whenLabel(nx) : `${D.notebooks.filter(x => x.subjectId === s.id).length} notities · ${D.summaries.filter(x => x.subjectId === s.id).length} samenv.`;
-        return `<button class="subject-chip" data-sub="${s.id}" style="--c:${s.color}">
-          <span class="sc-band"></span>
-          <span class="sc-body"><b>${esc(s.name)}</b><small>${sub}</small></span>
-          ${dueBySub[s.id] ? `<span class="sc-due" title="${dueBySub[s.id]} kaarten te herhalen">${dueBySub[s.id]}</span>` : ''}
-        </button>`;
-      }).join('')}
+      ${D.subjects.map(s => `<button class="subject-chip" data-sub="${s.id}" style="--c:${s.color}">
+        <span class="sc-band"></span><span class="sc-name">${esc(s.name)}</span>
+        ${dueBySub[s.id] ? `<span class="sc-due" title="${dueBySub[s.id]} kaarten te herhalen">${dueBySub[s.id]}</span>` : ''}
+      </button>`).join('')}
       <button class="subject-chip add" data-a="addsubject" aria-label="Vak toevoegen">${icon('plus', 20)}</button>
     </nav>
     ${hero}
@@ -392,7 +383,7 @@ export async function dashboard(root) {
         <section class="card review ${due.length ? '' : 'quiet'}">
           <div class="card-h"><h3>${icon('cards', 18)} Herhalen</h3></div>
           ${due.length ? `<div class="review-row"><p class="big-num">${due.length}<small> kaart${due.length > 1 ? 'en' : ''} klaar</small></p>
-              <button class="btn primary" data-a="review">${icon('cards', 18)} Start herhalen</button></div>
+              <button class="btn primary" data-a="review">Start herhalen</button></div>
             <div class="chips">${Object.entries(dueBySub).map(([id, n]) => D.sub[id] ? `<a class="chip" href="#/oefenen/${id}" style="--c:${D.sub[id].color}">${esc(D.sub[id].name)} · ${n}</a>` : '').join('')}</div>`
             : `<p class="empty small">Alles herhaald voor vandaag. ${D.cards.length ? '' : 'Begrippen en oefenvragen uit je samenvattingen komen hier vanzelf.'}</p>`}
         </section>

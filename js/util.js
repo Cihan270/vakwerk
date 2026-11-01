@@ -1,5 +1,5 @@
 // Kleine hulpfuncties: DOM, datums, iconen, dialogen en meldingen.
-export const APP_VERSION = 'v29'; // gelijk houden met VERSION in sw.js
+export const APP_VERSION = 'v30'; // gelijk houden met VERSION in sw.js
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -68,7 +68,7 @@ export function greeting(d = new Date()) {
 }
 
 // ---------- Kleuren ----------
-export const SUBJECT_COLORS = ['#4f6bed', '#e5484d', '#12a594', '#f5a524', '#8e4ec6', '#e54d9a', '#0090ff', '#46a758', '#d6672e', '#5b6b7f'];
+export const SUBJECT_COLORS = ['#b5654a', '#a8473f', '#7c8455', '#c2974b', '#8a6a7c', '#b27a80', '#6d7f8a', '#5f7a5a', '#c07c4f', '#7d7468'];
 export const PEN_COLORS = ['#1c1d21', '#2b59c3', '#d23c3c', '#178a5a', '#7a3fc0', '#e07a12'];
 export const HL_COLORS = ['#ffd84d', '#7ee08f', '#ff8fc7', '#7cc8ff', '#ffb35c'];
 
