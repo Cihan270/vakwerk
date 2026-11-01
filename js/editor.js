@@ -3,7 +3,7 @@ import { db, getSetting, setSetting, RUNTIME } from './db.js';
 import { $, $$, esc, uid, icon, debounce, toast, popover, closePopovers, confirmDialog, menu, pickFile, fmtDuration, fmtDate, saveFile, PEN_COLORS, HL_COLORS } from './util.js';
 import {
   PAGE_W, PAGE_H, PAPERS, bbox, drawStroke, drawStrokes, drawPaper, paperCss, thumbnail, strokeHit, eraseFromStroke,
-  strokesInPoly, translateStroke, unionBox, isScribble, scribbleTargets, recognize, shapePoints, smoothPoints, SMOOTH_LEVELS,
+  strokesInPoly, pointInPoly, translateStroke, scaleStroke, unionBox, isScribble, scribbleTargets, recognize, shapePoints, smoothPoints, SMOOTH_LEVELS,
   BOARD_PAPERS, boardBg, renderFit, contentBounds,
 } from './ink.js';
 
@@ -242,13 +242,13 @@ export async function openEditor(root, notebookId, { onExit }) {
   // ---------- Getypte tekst ----------
   // pg.texts = [{ id, x, y, w, t, s, c }] in pagina-eenheden (x/y = linkerbovenhoek, s = lettergrootte).
   // Een tekstvak is een <textarea> boven de inkt; alleen met het tekst-gereedschap kun je erin klikken.
-  const TEXT_SIZES = [18, 22, 30];
+  const TEXT_SIZES = [18, 22, 30], TEXT_MIN = 8, TEXT_MAX = 160;
   const lineH = s => Math.round(s * 1.64); // 22 → 36 = lijnafstand van het lijntjespapier
   let tedit = null; // tekstvak dat je nu bewerkt { pg, t, el, before }
   let freshText = null; // id van een tekstvak dat net is aangemaakt (nog leeg)
   const txtBar = document.createElement('div');
   txtBar.className = 'sel-bar txt-bar';
-  txtBar.innerHTML = `<button data-x="move" aria-label="Verplaatsen">${icon('move', 18)}</button><button data-x="del" class="danger" aria-label="Verwijder tekst">${icon('trash', 18)}</button>`;
+  txtBar.innerHTML = `<button data-x="move" aria-label="Verplaatsen">${icon('move', 18)}</button><button data-x="smaller" aria-label="Tekst kleiner">A−</button><button data-x="bigger" aria-label="Tekst groter">A+</button><button data-x="del" class="danger" aria-label="Verwijder tekst">${icon('trash', 18)}</button>`;
   const textColor = c => (T.dark && c === PEN_COLORS[0] ? '#e9e9ec' : c);
   function placeTexts(pg) {
     const st = S.get(pg.id);
@@ -334,6 +334,12 @@ export async function openEditor(root, notebookId, { onExit }) {
     e.stopPropagation();
     if (!b || !tedit) return;
     if (b.dataset.x === 'del') { tedit.t.t = ''; tedit.el.value = ''; tedit.el.blur(); return; }
+    if (b.dataset.x === 'smaller' || b.dataset.x === 'bigger') {
+      const f = b.dataset.x === 'bigger' ? 1.15 : 1 / 1.15;
+      tedit.t.s = Math.min(TEXT_MAX, Math.max(TEXT_MIN, r1(tedit.t.s * f)));
+      placeTexts(tedit.pg);
+      return;
+    }
     // verslepen
     const { pg, t } = tedit, st = S.get(pg.id);
     try { txtBar.setPointerCapture(e.pointerId); } catch {}
@@ -358,23 +364,40 @@ export async function openEditor(root, notebookId, { onExit }) {
     txtBar.addEventListener('pointercancel', up);
   });
   // Tekst op een canvas tekenen (export en miniatuur), met dezelfde regelafbreking als op het scherm
-  function drawTextsOn(ctx, pg) {
-    for (const t of pg.texts || []) {
+  function wrapLines(ctx, t) {
+    ctx.font = `${t.s}px -apple-system, "Segoe UI", system-ui, sans-serif`;
+    const lines = [];
+    for (const para of t.t.split('\n')) {
+      let line = '';
+      for (const word of para.split(' ')) {
+        const test = line ? line + ' ' + word : word;
+        if (line && ctx.measureText(test).width > t.w - 4) { lines.push(line); line = word; } else line = test;
+      }
+      lines.push(line);
+    }
+    return lines;
+  }
+  function drawTextsOn(ctx, pg, list = pg.texts || []) {
+    for (const t of list) {
       const lh = lineH(t.s);
-      ctx.font = `${t.s}px -apple-system, "Segoe UI", system-ui, sans-serif`;
+      const lines = wrapLines(ctx, t);
       ctx.fillStyle = t.c;
       ctx.textBaseline = 'middle';
-      let y = t.y + lh / 2;
-      for (const para of t.t.split('\n')) {
-        let line = '';
-        for (const word of para.split(' ')) {
-          const test = line ? line + ' ' + word : word;
-          if (line && ctx.measureText(test).width > t.w - 4) { ctx.fillText(line, t.x + 2, y); y += lh; line = word; } else line = test;
-        }
-        ctx.fillText(line, t.x + 2, y);
-        y += lh;
-      }
+      lines.forEach((line, i) => ctx.fillText(line, t.x + 2, t.y + lh / 2 + i * lh));
     }
+  }
+  // Waar de tekst echt staat (het vak zelf is vaak veel breder dan de tekst)
+  const measureCtx = document.createElement('canvas').getContext('2d');
+  function textBox(t) {
+    const lines = wrapLines(measureCtx, t);
+    const w = Math.max(...lines.map(l => measureCtx.measureText(l).width));
+    return [t.x, t.y, t.x + w + 4, t.y + lines.length * lineH(t.s)];
+  }
+  function textsInPoly(pg, poly) {
+    return (pg.texts || []).filter(t => {
+      const [x0, y0, x1, y1] = textBox(t);
+      return pointInPoly((x0 + x1) / 2, (y0 + y1) / 2, poly);
+    });
   }
 
   const io = new IntersectionObserver(entries => {
@@ -522,7 +545,17 @@ export async function openEditor(root, notebookId, { onExit }) {
     redo.length = 0;
     updateUndoBtns();
   }
+  // Eén stap ongedaan maken voor een wijziging op meerdere pagina's of aan inkt én tekst
+  function pushUndoOps(ops) {
+    if (!ops.length) return;
+    if (ops.length === 1) return pushUndo(ops[0].pg, ops[0].before, ops[0].after, ops[0].kind);
+    undo.push({ kind: 'multi', ops: ops.map(o => ({ id: o.pg.id, before: o.before, after: o.after, kind: o.kind || 'strokes' })) });
+    if (undo.length > 200) undo.shift();
+    redo.length = 0;
+    updateUndoBtns();
+  }
   function applyOp(op, which) {
+    if (op.kind === 'multi') { op.ops.forEach(o => applyOp(o, which)); return; }
     const pg = byId(op.id);
     if (!pg) return;
     clearSelection();
@@ -558,7 +591,7 @@ export async function openEditor(root, notebookId, { onExit }) {
       h += `<div class="seg small"><button class="pill ${T.eraser.mode === 'stroke' ? 'on' : ''}" data-em="stroke">Hele lijn</button><button class="pill ${T.eraser.mode === 'precise' ? 'on' : ''}" data-em="precise">Precies</button></div>`;
       h += `<div class="widths">${WIDTHS.eraser.map(w => `<button class="wd ${w === T.eraser.w ? 'on' : ''}" data-w="${w}" aria-label="Grootte"><i class="ring" style="width:${6 + w / 2.2}px;height:${6 + w / 2.2}px"></i></button>`).join('')}</div>`;
     } else {
-      h += `<span class="hint">Omcirkel inkt om te selecteren · tik op een afbeelding om hem te verplaatsen</span>`;
+      h += `<span class="hint">Omcirkel inkt of tekst · sleep om te verplaatsen, ook naar een andere pagina · hoekje = groter/kleiner</span>`;
     }
     optsEl.innerHTML = h;
     const ci = $('input[type=color]', optsEl);
@@ -659,12 +692,6 @@ export async function openEditor(root, notebookId, { onExit }) {
     liveRaf = 0;
     clearLive();
     const ctx = live.getContext('2d');
-    if (drag && sel) {
-      const st = S.get(sel.pg.id);
-      setT(ctx, st, drag.dx, drag.dy);
-      drawStrokes(ctx, sel.pg.strokes.filter(s => sel.ids.has(s.id)), { dark: T.dark });
-      return;
-    }
     if (!active) return;
     const st = active.st;
     setT(ctx, st);
@@ -709,11 +736,12 @@ export async function openEditor(root, notebookId, { onExit }) {
     if (shape.type !== 'line') {
       // Cirkel om bestaande inkt + vasthouden = lasso-selectie
       const inside = strokesInPoly(active.pg.strokes, shape.poly, 0.6);
-      if (inside.length) {
+      const insideTexts = textsInPoly(active.pg, shape.poly);
+      if (inside.length || insideTexts.length) {
         const pg = active.pg;
         active = null;
         clearLive();
-        select(pg, inside);
+        select(pg, inside, insideTexts);
         return;
       }
     }
@@ -855,7 +883,8 @@ export async function openEditor(root, notebookId, { onExit }) {
       const poly = a.pts.filter((_, i) => i % 3 !== 2);
       if (poly.length >= 6) {
         const hits = strokesInPoly(pg.strokes, poly, 0.5);
-        if (hits.length) select(pg, hits);
+        const textHits = textsInPoly(pg, poly);
+        if (hits.length || textHits.length) select(pg, hits, textHits);
       }
       return;
     }
@@ -1078,12 +1107,13 @@ export async function openEditor(root, notebookId, { onExit }) {
   ro.observe(scrollEl);
 
   // ---------- Selectie (lasso) ----------
-  function select(pg, strokes) {
+  function select(pg, strokes, texts = []) {
     clearSelection();
-    sel = { pg, ids: new Set(strokes.map(s => s.id)) };
+    sel = { pg, ids: new Set(strokes.map(s => s.id)), tids: new Set(texts.map(t => t.id)) };
     const st = S.get(pg.id);
     const box = document.createElement('div');
     box.className = 'sel-box';
+    box.innerHTML = '<i class="img-handle" aria-label="Vergroten of verkleinen"></i>';
     const bar = document.createElement('div');
     bar.className = 'sel-bar';
     bar.innerHTML = `
@@ -1108,11 +1138,20 @@ export async function openEditor(root, notebookId, { onExit }) {
     });
   }
   function selStrokes() { return sel ? sel.pg.strokes.filter(s => sel.ids.has(s.id)) : []; }
+  function selTexts() { return sel ? (sel.pg.texts || []).filter(t => sel.tids.has(t.id)) : []; }
+  function boundsOf(strokes, texts) {
+    const b = unionBox(strokes);
+    for (const t of texts) {
+      const q = textBox(t);
+      b[0] = Math.min(b[0], q[0]); b[1] = Math.min(b[1], q[1]); b[2] = Math.max(b[2], q[2]); b[3] = Math.max(b[3], q[3]);
+    }
+    return b;
+  }
   function positionSelection() {
     if (!sel) return;
-    const list = selStrokes();
-    if (!list.length) return clearSelection();
-    const [x0, y0, x1, y1] = unionBox(list);
+    const list = selStrokes(), texts = selTexts();
+    if (!list.length && !texts.length) return clearSelection();
+    const [x0, y0, x1, y1] = boundsOf(list, texts);
     const k = cssK(), [ox, oy] = cssO(), pad = 8 / zf();
     const L = (x0 - pad) * k + ox, Tp = (y0 - pad) * k + oy, B = (y1 + pad) * k + oy;
     Object.assign(sel.box.style, {
@@ -1286,68 +1325,218 @@ export async function openEditor(root, notebookId, { onExit }) {
   };
   document.addEventListener('paste', onPaste);
 
+  // Tijdens slepen en schalen hangt de selectie als plaatje in de selectierand. Die mag buiten de pagina komen,
+  // het live-canvas niet: daarom was de inkt onzichtbaar zodra je hem naar een andere pagina sleepte.
+  function showGhost() {
+    const strokes = selStrokes(), texts = selTexts();
+    const [x0, y0, x1, y1] = boundsOf(strokes, texts), pad = 8 / zf();
+    const g = document.createElement('canvas');
+    g.className = 'sel-ghost';
+    const w = x1 - x0 + pad * 2, h = y1 - y0 + pad * 2;
+    const r = Math.min(cssK() * (window.devicePixelRatio || 1), 4096 / Math.max(w, h));
+    g.width = Math.ceil(w * r);
+    g.height = Math.ceil(h * r);
+    const ctx = g.getContext('2d');
+    ctx.setTransform(r, 0, 0, r, -(x0 - pad) * r, -(y0 - pad) * r);
+    drawStrokes(ctx, strokes, { dark: T.dark });
+    drawTextsOn(ctx, null, texts.map(t => ({ ...t, c: textColor(t.c) })));
+    sel.box.append(g);
+    setSelTextsHidden(true);
+    sel.bar.style.visibility = 'hidden';
+    render(sel.pg);
+  }
+  function hideGhost() {
+    sel.box.querySelector('.sel-ghost')?.remove();
+    setSelTextsHidden(false);
+    sel.bar.style.visibility = '';
+  }
+  function setSelTextsHidden(hidden) {
+    const el = S.get(sel.pg.id).el;
+    for (const id of sel.tids) { const t = el.querySelector(`.pg-text[data-txt="${id}"]`); if (t) t.style.visibility = hidden ? 'hidden' : ''; }
+  }
   function startDrag(e) {
     e.preventDefault();
     e.stopPropagation();
-    const st = S.get(sel.pg.id);
-    try { sel.box.setPointerCapture(e.pointerId); } catch {}
+    if (e.target.closest('.img-handle')) return startSelResize(e);
+    const box = sel.box, st = S.get(sel.pg.id);
+    try { box.setPointerCapture(e.pointerId); } catch {}
     const [x, y] = toUnit(e, st);
     drag = { id: e.pointerId, x, y, dx: 0, dy: 0 };
-    sel.bar.style.visibility = 'hidden';
-    render(sel.pg);
-    ensureLive(st);
-    liveSoon();
-    const move = ev => {
-      if (ev.pointerId !== drag?.id) return;
-      const [mx, my] = toUnit(ev, st);
+    showGhost();
+    const at = { clientX: e.clientX, clientY: e.clientY };
+    const update = () => {
+      if (!drag) return;
+      const [mx, my] = toUnit(at, st);
       drag.dx = mx - drag.x;
       drag.dy = my - drag.y;
-      sel.box.style.transform = `translate(${drag.dx * cssK()}px, ${drag.dy * cssK()}px)`;
-      liveSoon();
+      box.style.transform = `translate(${drag.dx * cssK()}px, ${drag.dy * cssK()}px)`;
+    };
+    // Bij de rand van het beeld scrolt de notitie mee, zo kom je ook bij pagina's die nog niet in beeld zijn
+    let moved = false;
+    const tick = () => {
+      if (drag?.id !== e.pointerId) return;
+      if (moved && !board) {
+        const r = scrollEl.getBoundingClientRect(), m = 70;
+        const v = at.clientY < r.top + m ? at.clientY - r.top - m : at.clientY > r.bottom - m ? at.clientY - r.bottom + m : 0;
+        if (v) scrollEl.scrollTop += v * 0.2;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    const move = ev => {
+      if (ev.pointerId !== drag?.id) return;
+      at.clientX = ev.clientX;
+      at.clientY = ev.clientY;
+      moved = true;
+      update();
     };
     const up = ev => {
       if (ev.pointerId !== drag?.id) return;
-      sel.box.removeEventListener('pointermove', move);
-      sel.box.removeEventListener('pointerup', up);
-      sel.box.removeEventListener('pointercancel', up);
+      box.removeEventListener('pointermove', move);
+      box.removeEventListener('pointerup', up);
+      box.removeEventListener('pointercancel', up);
+      scrollEl.removeEventListener('scroll', update);
       const { dx, dy } = drag;
       drag = null;
-      clearLive();
-      sel.bar.style.visibility = '';
-      if (Math.abs(dx) + Math.abs(dy) > 0.5) {
-        const pg = sel.pg, before = pg.strokes, ids = new Set();
-        pg.strokes = before.map(s => { if (!sel.ids.has(s.id)) return s; const n = translateStroke(s, dx, dy, uid('s')); ids.add(n.id); return n; });
-        sel.ids = ids;
-        pushUndo(pg, before, pg.strokes);
-        save(pg);
-      }
-      render(sel.pg);
-      positionSelection();
+      hideGhost();
+      if (ev.type === 'pointerup' && Math.abs(dx) + Math.abs(dy) > 0.5) dropSelection(dx, dy);
+      else { render(sel.pg); positionSelection(); }
     };
-    sel.box.addEventListener('pointermove', move);
-    sel.box.addEventListener('pointerup', up);
-    sel.box.addEventListener('pointercancel', up);
+    box.addEventListener('pointermove', move);
+    box.addEventListener('pointerup', up);
+    box.addEventListener('pointercancel', up);
+    scrollEl.addEventListener('scroll', update);
+  }
+  // Loslaten: de selectie gaat naar de pagina waar het midden ervan nu op ligt, en blijft binnen die pagina
+  function dropSelection(dx, dy) {
+    const src = sel.pg, strokes = selStrokes(), texts = selTexts();
+    const [x0, y0, x1, y1] = boundsOf(strokes, texts);
+    let tgt = src, mx = dx, my = dy;
+    if (!board) {
+      const r = S.get(src.id).el.getBoundingClientRect(), u = r.height / PAGE_H;
+      const cy = r.top + ((y0 + y1) / 2 + dy) * u;
+      let best = Infinity;
+      for (const p of pages) {
+        const q = S.get(p.id)?.el.getBoundingClientRect();
+        if (!q) continue;
+        const d = cy < q.top ? q.top - cy : cy > q.bottom ? cy - q.bottom : 0;
+        if (d < best) { best = d; tgt = p; mx = dx + (r.left - q.left) / u; my = dy + (r.top - q.top) / u; }
+      }
+      mx = Math.max(-x0, Math.min(PAGE_W - x1, mx));
+      my = Math.max(-y0, Math.min(PAGE_H - y1, my));
+    }
+    const newS = strokes.map(s => translateStroke(s, mx, my, uid('s')));
+    const newT = texts.map(t => {
+      const x = r1(t.x + mx);
+      return { ...t, x, y: r1(t.y + my), w: board ? t.w : Math.min(t.w, PAGE_W - x) };
+    });
+    const ops = [];
+    const change = (pg, kind, after) => {
+      ops.push({ pg, kind, before: pg[kind] || [], after });
+      pg[kind] = after;
+    };
+    if (tgt === src) {
+      if (newS.length) { const m = new Map(strokes.map((s, i) => [s, newS[i]])); change(src, 'strokes', src.strokes.map(s => m.get(s) || s)); }
+      if (newT.length) { const m = new Map(texts.map((t, i) => [t, newT[i]])); change(src, 'texts', src.texts.map(t => m.get(t) || t)); }
+    } else {
+      if (newS.length) {
+        change(src, 'strokes', src.strokes.filter(s => !sel.ids.has(s.id)));
+        change(tgt, 'strokes', [...tgt.strokes, ...newS]);
+      }
+      if (newT.length) {
+        change(src, 'texts', src.texts.filter(t => !sel.tids.has(t.id)));
+        change(tgt, 'texts', [...(tgt.texts || []), ...newT]);
+      }
+      toast(`Verplaatst naar pagina ${pages.indexOf(tgt) + 1}`);
+    }
+    pushUndoOps(ops);
+    clearSelection();
+    if (!S.get(tgt.id).canvas) attach(tgt);
+    for (const pg of new Set([src, tgt])) { render(pg); placeTexts(pg); save(pg); }
+    select(tgt, newS, newT);
+  }
+  // Hoekgreep: selectie (inkt en tekst) groter of kleiner, de linkerbovenhoek blijft staan
+  function startSelResize(e) {
+    const box = sel.box, pg = sel.pg, st = S.get(pg.id);
+    try { box.setPointerCapture(e.pointerId); } catch {}
+    const strokes = selStrokes(), texts = selTexts();
+    const [ax, ay, x1, y1] = boundsOf(strokes, texts), w = x1 - ax, h = y1 - ay, pad = 8 / zf();
+    const [sx, sy] = toUnit(e, st), vx = sx - ax, vy = sy - ay, v2 = vx * vx + vy * vy || 1;
+    const fMin = Math.max(0.1, 12 / Math.max(w, h, 1));
+    const fMax = board ? 8 : Math.max(fMin, Math.min((PAGE_W - ax) / w, (PAGE_H - ay) / h));
+    let f = 1;
+    drag = { id: e.pointerId, x: sx, y: sy, dx: 0, dy: 0 };
+    showGhost();
+    const move = ev => {
+      if (ev.pointerId !== e.pointerId) return;
+      const [x, y] = toUnit(ev, st);
+      f = Math.max(fMin, Math.min(fMax, ((x - ax) * vx + (y - ay) * vy) / v2));
+      box.style.width = (w * f + pad * 2) * cssK() + 'px';
+      box.style.height = (h * f + pad * 2) * cssK() + 'px';
+    };
+    const up = ev => {
+      if (ev.pointerId !== e.pointerId) return;
+      box.removeEventListener('pointermove', move);
+      box.removeEventListener('pointerup', up);
+      box.removeEventListener('pointercancel', up);
+      drag = null;
+      hideGhost();
+      if (ev.type !== 'pointerup' || Math.abs(f - 1) < 0.01) { render(pg); positionSelection(); return; }
+      const [ns, nt] = replaceSel(pg, s => scaleStroke(s, f, ax, ay, uid('s')), t => {
+        const x = r1(ax + (t.x - ax) * f);
+        return { ...t, x, y: r1(ay + (t.y - ay) * f), s: Math.min(TEXT_MAX, Math.max(TEXT_MIN, r1(t.s * f))), w: board ? t.w * f : Math.min(t.w * f, PAGE_W - x) };
+      });
+      select(pg, ns, nt);
+    };
+    box.addEventListener('pointermove', move);
+    box.addEventListener('pointerup', up);
+    box.addEventListener('pointercancel', up);
+  }
+  // Vervangt de geselecteerde inkt en tekst op hun plek, als één stap ongedaan maken
+  function replaceSel(pg, mapS, mapT) {
+    const ns = [], nt = [], ops = [];
+    if (sel.ids.size) {
+      const before = pg.strokes;
+      pg.strokes = before.map(s => { if (!sel.ids.has(s.id)) return s; const n = mapS(s); ns.push(n); return n; });
+      ops.push({ pg, before, after: pg.strokes });
+    }
+    if (sel.tids.size) {
+      const before = pg.texts;
+      pg.texts = before.map(t => { if (!sel.tids.has(t.id)) return t; const n = mapT(t); nt.push(n); return n; });
+      ops.push({ pg, before, after: pg.texts, kind: 'texts' });
+    }
+    sel.ids = new Set(ns.map(s => s.id));
+    pushUndoOps(ops);
+    render(pg);
+    placeTexts(pg);
+    save(pg);
+    return [ns, nt];
   }
   function selDelete() {
-    const pg = sel.pg, before = pg.strokes;
-    pg.strokes = before.filter(s => !sel.ids.has(s.id));
-    pushUndo(pg, before, pg.strokes);
+    const pg = sel.pg, ops = [];
+    if (sel.ids.size) { const before = pg.strokes; pg.strokes = before.filter(s => !sel.ids.has(s.id)); ops.push({ pg, before, after: pg.strokes }); }
+    if (sel.tids.size) { const before = pg.texts; pg.texts = before.filter(t => !sel.tids.has(t.id)); ops.push({ pg, before, after: pg.texts, kind: 'texts' }); }
+    pushUndoOps(ops);
     clearSelection();
     render(pg);
+    placeTexts(pg);
     save(pg);
   }
   function selDuplicate() {
-    const pg = sel.pg, before = pg.strokes;
-    const copies = selStrokes().map(s => translateStroke(s, 30 / zf(), 30 / zf(), uid('s')));
-    pg.strokes = [...before, ...copies];
-    pushUndo(pg, before, pg.strokes);
+    const pg = sel.pg, ops = [], d = 30 / zf();
+    const copies = selStrokes().map(s => translateStroke(s, d, d, uid('s')));
+    const textCopies = selTexts().map(t => ({ ...t, id: uid('t'), x: r1(t.x + d), y: r1(t.y + d) }));
+    if (copies.length) { const before = pg.strokes; pg.strokes = [...before, ...copies]; ops.push({ pg, before, after: pg.strokes }); }
+    if (textCopies.length) { const before = pg.texts || []; pg.texts = [...before, ...textCopies]; ops.push({ pg, before, after: pg.texts, kind: 'texts' }); }
+    pushUndoOps(ops);
     render(pg);
+    placeTexts(pg);
     save(pg);
-    select(pg, copies);
+    select(pg, copies, textCopies);
   }
   // Kopiëren + plakken: de selectie gaat naar inkClip, "Plak" (rechtsonder of ⌘V) zet hem op de pagina die in beeld is
   function selCopy() {
-    inkClip = { strokes: selStrokes(), notebookId };
+    inkClip = { strokes: selStrokes(), texts: selTexts(), notebookId };
     updatePasteBtn();
     toast('Gekopieerd — ga naar een pagina en tik rechtsonder op "Plak"');
   }
@@ -1365,7 +1554,7 @@ export async function openEditor(root, notebookId, { onExit }) {
       vis = [Math.max(0, ux(sr.left)), Math.max(0, uy(sr.top)), Math.min(PAGE_W, ux(sr.right)), Math.min(PAGE_H, uy(sr.bottom))];
     }
     // Op dezelfde plek als dat helemaal in beeld is, anders midden in beeld
-    const [x0, y0, x1, y1] = unionBox(inkClip.strokes);
+    const [x0, y0, x1, y1] = boundsOf(inkClip.strokes, inkClip.texts);
     let dx = 0, dy = 0;
     if (x0 < vis[0] || y0 < vis[1] || x1 > vis[2] || y1 > vis[3]) {
       dx = (vis[0] + vis[2]) / 2 - (x0 + x1) / 2;
@@ -1373,19 +1562,26 @@ export async function openEditor(root, notebookId, { onExit }) {
     }
     // Ligt er al een kopie precies daar (twee keer plakken, of op de bronpagina)? Iets opschuiven
     const taken = new Set(pg.strokes.map(s => s.b.map(Math.round).join()));
-    const first = inkClip.strokes[0].b;
-    for (let i = 0; i < 20 && taken.has([first[0] + dx, first[1] + dy, first[2] + dx, first[3] + dy].map(Math.round).join()); i++) { dx += 30 / zf(); dy += 30 / zf(); }
+    const takenText = new Set((pg.texts || []).map(t => [t.x, t.y].map(Math.round).join()));
+    const first = inkClip.strokes[0]?.b, firstT = inkClip.texts[0];
+    const isTaken = () => first
+      ? taken.has([first[0] + dx, first[1] + dy, first[2] + dx, first[3] + dy].map(Math.round).join())
+      : takenText.has([firstT.x + dx, firstT.y + dy].map(Math.round).join());
+    for (let i = 0; i < 20 && isTaken(); i++) { dx += 30 / zf(); dy += 30 / zf(); }
     const copies = inkClip.strokes.map(s => {
       const n = translateStroke(s, dx, dy, uid('s'));
       if (inkClip.notebookId !== notebookId) { delete n.r; delete n.t; } // opname hoort bij de andere notitie
       return n;
     });
-    const before = pg.strokes;
-    pg.strokes = [...before, ...copies];
-    pushUndo(pg, before, pg.strokes);
+    const textCopies = inkClip.texts.map(t => ({ ...t, id: uid('t'), x: r1(t.x + dx), y: r1(t.y + dy) }));
+    const ops = [];
+    if (copies.length) { const before = pg.strokes; pg.strokes = [...before, ...copies]; ops.push({ pg, before, after: pg.strokes }); }
+    if (textCopies.length) { const before = pg.texts || []; pg.texts = [...before, ...textCopies]; ops.push({ pg, before, after: pg.texts, kind: 'texts' }); }
+    pushUndoOps(ops);
     render(pg);
+    placeTexts(pg);
     save(pg);
-    select(pg, copies);
+    select(pg, copies, textCopies);
   }
   updatePasteBtn();
   function selColorMenu(anchor) {
@@ -1395,12 +1591,7 @@ export async function openEditor(root, notebookId, { onExit }) {
       const b = e.target.closest('[data-c]');
       if (!b) return;
       closePopovers();
-      const pg = sel.pg, before = pg.strokes, ids = new Set();
-      pg.strokes = before.map(s => { if (!sel.ids.has(s.id)) return s; const n = { ...s, id: uid('s'), c: b.dataset.c }; ids.add(n.id); return n; });
-      sel.ids = ids;
-      pushUndo(pg, before, pg.strokes);
-      render(pg);
-      save(pg);
+      replaceSel(sel.pg, s => ({ ...s, id: uid('s'), c: b.dataset.c }), t => ({ ...t, c: b.dataset.c }));
     });
   }
 

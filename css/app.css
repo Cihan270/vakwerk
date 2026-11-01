@@ -601,6 +601,7 @@ mark.tc-miss { background: color-mix(in srgb, var(--warn) 24%, transparent); col
 .page.board { position: absolute; inset: 0; border-radius: 0; box-shadow: none; touch-action: none; overflow: hidden; }
 .paper-pick.four { grid-template-columns: repeat(4, 1fr); }
 .sel-box { position: absolute; border: 1.5px dashed var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); border-radius: 6px; touch-action: none; cursor: move; z-index: 2; }
+.sel-ghost { position: absolute; left: -1.5px; top: -1.5px; width: calc(100% + 3px); height: calc(100% + 3px); pointer-events: none; }
 .sel-bar { position: absolute; z-index: 3; touch-action: none; display: flex; gap: 2px; background: #1d1e22; color: #fff; border-radius: 12px; padding: 4px; box-shadow: 0 6px 20px rgba(0, 0, 0, .25); }
 .sel-bar button { display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; height: 36px; border-radius: 8px; font-size: 14px; font-weight: 600; }
 .sel-bar button:active { background: rgba(255, 255, 255, .15); }

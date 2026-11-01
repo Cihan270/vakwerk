@@ -307,6 +307,14 @@ export function translateStroke(s, dx, dy, id) {
   return { ...s, id, p, b: [s.b[0] + dx, s.b[1] + dy, s.b[2] + dx, s.b[3] + dy] };
 }
 
+// Vergroten/verkleinen vanuit punt (ax, ay); de lijndikte schaalt mee
+export function scaleStroke(s, f, ax, ay, id) {
+  const p = s.p.slice();
+  for (let i = 0; i < p.length; i += 3) { p[i] = ax + (p[i] - ax) * f; p[i + 1] = ay + (p[i + 1] - ay) * f; }
+  const b = s.b;
+  return { ...s, id, p, w: s.w * f, b: [ax + (b[0] - ax) * f, ay + (b[1] - ay) * f, ax + (b[2] - ax) * f, ay + (b[3] - ay) * f] };
+}
+
 export function unionBox(strokes) {
   const b = [Infinity, Infinity, -Infinity, -Infinity];
   for (const s of strokes) {
