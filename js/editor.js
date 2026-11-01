@@ -47,7 +47,7 @@ export async function openEditor(root, notebookId, { onExit }) {
   const saveTools = debounce(() => setSetting('tools', T), 400);
 
   root.innerHTML = `
-  <div class="editor${T.dark ? ' dark' : ''}" style="--subject:${esc(subject?.color || '#4f6bed')}">
+  <div class="editor${T.dark ? ' dark' : ''}" style="--subject:${esc(subject?.color || '#7d5f42')}">
     <header class="ed-bar">
       <div class="ed-left">
         <button class="icon-btn" data-a="back" aria-label="Terug">${icon('back')}</button>
@@ -703,9 +703,9 @@ export async function openEditor(root, notebookId, { onExit }) {
       for (let i = 0; i < p.length; i += 3) i ? ctx.lineTo(p[i], p[i + 1]) : ctx.moveTo(p[i], p[i + 1]);
       ctx.setLineDash([8 / zf(), 7 / zf()]);
       ctx.lineWidth = 2 / zf();
-      ctx.strokeStyle = '#4f6bed';
+      ctx.strokeStyle = T.dark ? '#c9a27e' : '#7d5f42';
       ctx.stroke();
-      ctx.fillStyle = 'rgba(79,107,237,.06)';
+      ctx.fillStyle = T.dark ? 'rgba(201,162,126,.08)' : 'rgba(125,95,66,.06)';
       ctx.fill();
     } else if (active.tool === 'eraser' && active.last) {
       ctx.beginPath();
