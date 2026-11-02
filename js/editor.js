@@ -1,5 +1,6 @@
 // Notitie-editor: Apple Pencil-invoer, palm rejection, gebaren, lasso, audio-opname en zoom.
 import { db, getSetting, setSetting, RUNTIME } from './db.js';
+import { openBara, setBaraContext } from './bara.js';
 import { $, $$, esc, uid, icon, debounce, toast, popover, closePopovers, confirmDialog, menu, pickFile, fmtDuration, fmtDate, saveFile, PEN_COLORS, HL_COLORS } from './util.js';
 import {
   PAGE_W, PAGE_H, PAPERS, bbox, drawStroke, drawStrokes, drawPaper, paperCss, thumbnail, strokeHit, eraseFromStroke,
@@ -785,10 +786,6 @@ export async function openEditor(root, notebookId, { onExit }) {
     const pageEl = e.target.closest('.page');
     if (!pageEl) { clearSelection(); clearImageSel(); return; }
     const pg = byId(pageEl.dataset.id), st = S.get(pg.id);
-    if (T.tool === 'lasso') {
-      const im = imageAt(pg, ...toUnit(e, st));
-      if (im) { e.preventDefault(); selectImage(pg, im); return; }
-    }
     clearImageSel();
     if (!st.canvas) attach(pg);
     e.preventDefault();
@@ -880,11 +877,23 @@ export async function openEditor(root, notebookId, { onExit }) {
     }
     if (a.tool === 'lasso') {
       clearLive();
+      const [tx0, ty0, tx1, ty1] = bbox(a.pts);
+      if (tx1 - tx0 < 12 && ty1 - ty0 < 12) {
+        const im = imageAt(pg, tx0, ty0);
+        if (im) selectImage(pg, im);
+        return;
+      }
       const poly = a.pts.filter((_, i) => i % 3 !== 2);
       if (poly.length >= 6) {
         const hits = strokesInPoly(pg.strokes, poly, 0.5);
         const textHits = textsInPoly(pg, poly);
         if (hits.length || textHits.length) select(pg, hits, textHits);
+        else {
+          // Alleen een stuk slide of afbeelding omcirkeld: daar kun je wel iets over vragen
+          const [rx0, ry0, rx1, ry1] = bbox(a.pts);
+          const overImage = (pg.images || []).some(im => rx0 < im.x + im.w && rx1 > im.x && ry0 < im.y + im.h && ry1 > im.y);
+          if (overImage) select(pg, [], [], [rx0, ry0, rx1, ry1]);
+        }
       }
       return;
     }
@@ -1107,16 +1116,18 @@ export async function openEditor(root, notebookId, { onExit }) {
   ro.observe(scrollEl);
 
   // ---------- Selectie (lasso) ----------
-  function select(pg, strokes, texts = []) {
+  function select(pg, strokes, texts = [], region = null) {
     clearSelection();
-    sel = { pg, ids: new Set(strokes.map(s => s.id)), tids: new Set(texts.map(t => t.id)) };
+    sel = { pg, ids: new Set(strokes.map(s => s.id)), tids: new Set(texts.map(t => t.id)), region };
     const st = S.get(pg.id);
     const box = document.createElement('div');
     box.className = 'sel-box';
-    box.innerHTML = '<i class="img-handle" aria-label="Vergroten of verkleinen"></i>';
+    if (!region) box.innerHTML = '<i class="img-handle" aria-label="Vergroten of verkleinen"></i>';
     const bar = document.createElement('div');
     bar.className = 'sel-bar';
-    bar.innerHTML = `
+    const askBtn = `<button data-s="bara" aria-label="Vraag het Bara"><img class="sel-bara" src="img/bara.webp" alt=""><span>Bara</span></button>`;
+    bar.innerHTML = region ? `${askBtn}<button data-s="done" aria-label="Klaar">${icon('check', 18)}</button>` : `
+      ${askBtn}
       <button data-s="color" aria-label="Kleur">${icon('edit', 18)}<span>Kleur</span></button>
       <button data-s="copy" aria-label="Kopieer">${icon('clipboard', 18)}<span>Kopieer</span></button>
       <button data-s="dup" aria-label="Dupliceer">${icon('copy', 18)}<span>Dupliceer</span></button>
@@ -1130,6 +1141,7 @@ export async function openEditor(root, notebookId, { onExit }) {
     bar.addEventListener('click', e => {
       const b = e.target.closest('button');
       if (!b) return;
+      if (b.dataset.s === 'bara') return openBara();
       if (b.dataset.s === 'del') selDelete();
       if (b.dataset.s === 'copy') selCopy();
       if (b.dataset.s === 'dup') selDuplicate();
@@ -1137,6 +1149,69 @@ export async function openEditor(root, notebookId, { onExit }) {
       if (b.dataset.s === 'color') selColorMenu(b);
     });
   }
+  // Voor Bara: een stuk van de pagina als plaatje op wit papier, zoals het er op het scherm uitziet
+  async function shot(pg, [x0, y0, x1, y1], { mark, maxPx = 1400 } = {}) {
+    const w = x1 - x0, h = y1 - y0, k = Math.min(2, maxPx / Math.max(w, h));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w * k));
+    c.height = Math.max(1, Math.round(h * k));
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.setTransform(k, 0, 0, k, -x0 * k, -y0 * k);
+    if (!board) drawPaper(ctx, pg.paper);
+    await drawImagesOn(ctx, pg);
+    drawTextsOn(ctx, pg);
+    drawStrokes(ctx, pg.strokes);
+    if (mark) { ctx.strokeStyle = '#e0483e'; ctx.lineWidth = 4 / k; ctx.setLineDash([]); ctx.strokeRect(mark[0], mark[1], mark[2] - mark[0], mark[3] - mark[1]); }
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    c.width = c.height = 0;
+    return blob;
+  }
+  const pageBox = pg => {
+    if (!board) return [0, 0, PAGE_W, PAGE_H];
+    const b = boundsOf(pg.strokes, pg.texts || []);
+    return Number.isFinite(b[0]) ? [b[0] - 40, b[1] - 40, b[2] + 40, b[3] + 40] : visibleRect();
+  };
+  async function selectionShots() {
+    if (!sel) return null;
+    const pg = sel.pg, b = sel.region || boundsOf(selStrokes(), selTexts()), m = 30;
+    const crop = [b[0] - m, b[1] - m, b[2] + m, b[3] + m];
+    return [
+      { label: 'Selectie', blob: await shot(pg, crop) },
+      { label: 'Hele pagina', blob: await shot(pg, pageBox(pg), { mark: b, maxPx: 1100 }) },
+    ];
+  }
+  async function pageShots(max) {
+    const list = pages.slice(0, max);
+    const shots = [];
+    for (let i = 0; i < list.length; i++) shots.push({ label: `Pagina ${i + 1}`, blob: await shot(list[i], pageBox(list[i]), { maxPx: 1100 }) });
+    return { shots, total: pages.length };
+  }
+  // Antwoord van Bara als tekstvak: onder de selectie, anders op de pagina die in beeld is
+  function insertAnswer(text) {
+    const pg = sel?.pg || pages[currentPageIndex()], s = 22;
+    const lines = Math.ceil(text.length / 55) + text.split('\n').length;
+    const h = lines * lineH(s);
+    let x = 60, y;
+    if (board) { const v = visibleRect(); x = v[0] + 40; y = v[1] + 40; }
+    else if (sel) { const b = sel.region || boundsOf(selStrokes(), selTexts()); y = b[3] + 20; }
+    else { const r = S.get(pg.id).el.getBoundingClientRect(), sr = scrollEl.getBoundingClientRect(); y = (Math.max(sr.top, r.top) - r.top) / r.height * PAGE_H + 40; }
+    if (!board) y = Math.max(0, Math.min(PAGE_H - Math.min(h, PAGE_H / 2), y));
+    const t = { id: uid('t'), x, y: r1(y), w: board ? 720 : PAGE_W - 120, t: text, s, c: PEN_COLORS[0] };
+    const before = pg.texts || [];
+    pg.texts = [...before, t];
+    pushUndo(pg, before, pg.texts, 'texts');
+    placeTexts(pg);
+    save(pg);
+    toast('Antwoord op de pagina gezet');
+  }
+  setBaraContext({
+    subjectId: nb.subjectId, title: nb.title || 'Naamloos',
+    typedText: () => pages.flatMap(p => (p.texts || []).map(t => t.t)).join(' '),
+    selectionShots, pageShots, insertAnswer,
+  });
+
   function selStrokes() { return sel ? sel.pg.strokes.filter(s => sel.ids.has(s.id)) : []; }
   function selTexts() { return sel ? (sel.pg.texts || []).filter(t => sel.tids.has(t.id)) : []; }
   function boundsOf(strokes, texts) {
@@ -1150,8 +1225,8 @@ export async function openEditor(root, notebookId, { onExit }) {
   function positionSelection() {
     if (!sel) return;
     const list = selStrokes(), texts = selTexts();
-    if (!list.length && !texts.length) return clearSelection();
-    const [x0, y0, x1, y1] = boundsOf(list, texts);
+    if (!list.length && !texts.length && !sel.region) return clearSelection();
+    const [x0, y0, x1, y1] = sel.region || boundsOf(list, texts);
     const k = cssK(), [ox, oy] = cssO(), pad = 8 / zf();
     const L = (x0 - pad) * k + ox, Tp = (y0 - pad) * k + oy, B = (y1 + pad) * k + oy;
     Object.assign(sel.box.style, {
@@ -1357,6 +1432,7 @@ export async function openEditor(root, notebookId, { onExit }) {
   function startDrag(e) {
     e.preventDefault();
     e.stopPropagation();
+    if (sel.region) return;
     if (e.target.closest('.img-handle')) return startSelResize(e);
     const box = sel.box, st = S.get(sel.pg.id);
     try { box.setPointerCapture(e.pointerId); } catch {}
@@ -1928,6 +2004,7 @@ export async function openEditor(root, notebookId, { onExit }) {
     closed = true;
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('paste', onPaste);
+    setBaraContext(null);
     document.removeEventListener('visibilitychange', onHide);
     io.disconnect();
     ro.disconnect();

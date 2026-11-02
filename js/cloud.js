@@ -92,12 +92,14 @@ async function accessToken() {
   if (saved.session.expires_at * 1000 - 60_000 < Date.now()) await refreshSession();
   return saved.session.access_token;
 }
-async function call(path, { method = 'GET', headers = {}, body } = {}, retried = false) {
-  const res = await fetch(`${BASE}${path}`, { method, body, headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${await accessToken()}`, ...headers } });
-  if (res.status === 401 && !retried) { await refreshSession(); return call(path, { method, headers, body }, true); }
+async function call(path, { method = 'GET', headers = {}, body, signal } = {}, retried = false) {
+  const res = await fetch(`${BASE}${path}`, { method, body, signal, headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${await accessToken()}`, ...headers } });
+  if (res.status === 401 && !retried) { await refreshSession(); return call(path, { method, headers, body, signal }, true); }
   if (!res.ok) throw await fail(res);
   return res;
 }
+
+export const cloudFetch = call;
 
 // ---------- Wat er lokaal veranderd is ----------
 const keyOf = (store, rid) => `${store}/${rid}`;

@@ -7,6 +7,7 @@ import { catchUp } from './planner.js';
 import { autoDone } from './plansets.js';
 import { checkInbox, connectInbox } from './inbox.js';
 import { initCloud } from './cloud.js';
+import { mountBara } from './bara.js';
 
 const app = document.getElementById('app');
 let cleanup = null;
@@ -75,6 +76,7 @@ document.addEventListener('keydown', e => {
 
 route();
 requestPersistence();
+if (!RUNTIME.sandbox) mountBara();
 
 // Nieuws uit je account: scherm verversen, tenzij je ergens mee bezig bent
 initCloud({ onRemoteChange: () => {
