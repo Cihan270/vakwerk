@@ -2,7 +2,7 @@
 // het artifact, zodat alles tussen je apparaten synchroniseert en Claude er direct in kan schrijven.
 
 const DB_NAME = 'vakwerk';
-const VERSION = 3; // v2: studieplanning, v3: afbeeldingen en slides
+const VERSION = 4; // v2: studieplanning, v3: afbeeldingen en slides, v4: sync-status
 const STORES = {
   subjects: [],
   slots: ['subjectId'],
@@ -35,6 +35,8 @@ function open() {
         const s = d.createObjectStore(name, { keyPath: 'id' });
         indexes.forEach(ix => s.createIndex(ix, ix));
       }
+      // Per object: wanneer gewijzigd en of het nog naar het account moet (zie cloud.js). Hoort niet bij de back-up.
+      if (!d.objectStoreNames.contains('syncstate')) d.createObjectStore('syncstate', { keyPath: 'id' }).createIndex('dirty', 'dirty');
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -52,6 +54,7 @@ const idb = {
   async get(store, id) { const d = await open(); return wrap(d.transaction(store).objectStore(store).get(id)); },
   async all(store) { const d = await open(); return wrap(d.transaction(store).objectStore(store).getAll()); },
   async by(store, index, value) { const d = await open(); return wrap(d.transaction(store).objectStore(store).index(index).getAll(value)); },
+  async keys(store) { const d = await open(); return wrap(d.transaction(store).objectStore(store).getAllKeys()); },
   put(store, obj) { return run([store], 'readwrite', t => { t.objectStore(store).put(obj); }).then(() => obj); },
   putMany(store, arr) { return run([store], 'readwrite', t => { const s = t.objectStore(store); arr.forEach(o => s.put(o)); }); },
   del(store, id) { return run([store], 'readwrite', t => { t.objectStore(store).delete(id); }); },
@@ -190,6 +193,9 @@ function backend() {
   return backendP;
 }
 export const ready = () => backend();
+export const localStore = idb; // voor de sync: schrijven zonder dat het als eigen wijziging telt
+let writeHook = null;
+export function onWrite(fn) { writeHook = fn; }
 export async function rawStore() { const b = await backend(); return b.raw || null; }
 
 // Felle vakkleuren van vroeger worden bij het lezen aardetinten, zo gaan bestaande vakken en pakketten vanzelf mee
@@ -207,7 +213,12 @@ const softSubject = s => (s ? { ...s, color: softColor(s.color) } : s);
 
 export const db = Object.fromEntries(['get', 'all', 'by', 'put', 'putMany', 'del', 'delMany', 'clear']
   .map(m => [m, async (...a) => {
+    const cleared = writeHook && m === 'clear' ? await idb.keys(a[0]) : null;
     const r = await (await backend())[m](...a);
+    if (writeHook) {
+      const ids = m === 'put' ? [a[1].id] : m === 'putMany' ? a[1].map(o => o.id) : m === 'del' ? [a[1]] : m === 'delMany' ? a[1] : cleared;
+      if (ids) await writeHook(a[0], ids);
+    }
     if (a[0] !== 'subjects' || !['get', 'all', 'by'].includes(m)) return r;
     return Array.isArray(r) ? r.map(softSubject) : softSubject(r);
   }]));

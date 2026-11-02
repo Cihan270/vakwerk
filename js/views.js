@@ -12,6 +12,7 @@ import { importFile, exportBackup, seedDemo, removeDemo, wipeAll, isDemoSubject 
 import { PAPERS, drawStroke } from './ink.js';
 import { shiftBlock, shiftDay, undoShift } from './planner.js';
 import { enablePlanMove } from './planmove.js';
+import { isConfigured, isSignedIn, cloudStatus, sendCode, verifyCode, signOut, syncNow } from './cloud.js';
 import { planLinks, subjectSets, setForBlock } from './plansets.js';
 import { importPdf } from './pdf.js';
 import { connectInbox, checkInbox, disconnectInbox } from './inbox.js';
@@ -1237,6 +1238,8 @@ export async function settingsView(root) {
 
     ${standalone || RUNTIME.sandbox ? '' : `<section class="card notice"><h3>📲 Zet Vakwerk op je beginscherm</h3><p>Open deze pagina in <b>Safari</b> en tik op het deel-icoon <b>⬆︎</b> en dan <b>"Zet op beginscherm"</b>. Dan werkt de app schermvullend en offline, en blijven je notities veilig bewaard.</p></section>`}
 
+    ${cloudCard()}
+
     <section class="card">
       <div class="card-h"><h3>Vakken</h3><button class="btn small" data-a="addsubject">${icon('plus', 16)} Vak</button></div>
       <div class="list">${D.subjects.map(s => `<button class="list-row" data-editsub="${s.id}"><i class="dot" style="--c:${s.color}"></i><span><b>${esc(s.name)}</b>${s.aliases?.length ? `<small>Canvas: ${esc(s.aliases.join(', '))}</small>` : ''}</span>${icon('edit', 18)}</button>`).join('') || '<p class="empty small">Nog geen vakken.</p>'}</div>
@@ -1278,7 +1281,7 @@ export async function settingsView(root) {
 
     <section class="card">
       <h3>Back-up</h3>
-      <p class="muted">${RUNTIME.artifact ? 'Je gegevens staan in dit artifact op claude.ai.' : 'Alles staat alleen op deze iPad.'} Maak af en toe een back-up naar Bestanden, iCloud of OneDrive, inclusief alle inkt en opnames.</p>
+      <p class="muted">${RUNTIME.artifact ? 'Je gegevens staan in dit artifact op claude.ai.' : isSignedIn() ? 'Alles staat op dit apparaat en in je account.' : 'Alles staat alleen op deze iPad.'} Maak af en toe een back-up naar Bestanden, iCloud of OneDrive, inclusief alle inkt en opnames.</p>
       <div class="row gap wrap">
         <button class="btn" data-a="backup">${icon('export', 18)} Maak back-up</button>
         <button class="btn ghost" data-a="restore">${icon('import', 18)} Zet back-up terug</button>
@@ -1306,7 +1309,7 @@ export async function settingsView(root) {
         <button class="btn danger" data-a="wipe">${icon('trash', 18)} Alles wissen</button>
       </div>
     </section>
-    <p class="muted small center">Vakwerk ${APP_VERSION} · je data blijft op dit apparaat</p>
+    <p class="muted small center">Vakwerk ${APP_VERSION} · ${isSignedIn() ? 'gesynchroniseerd met je account' : 'je data blijft op dit apparaat'}</p>
   </div>`;
 
   const rerender = () => settingsView(root);
@@ -1336,10 +1339,74 @@ export async function settingsView(root) {
       case 'inboxoff': await disconnectInbox(); rerender(); return;
       case 'removedemo': if (await removeDemo()) rerender(); return;
       case 'wipe': if (await wipeAll()) go('#/'); return;
+      case 'cloudsend': {
+        cloudLogin.email = $('[data-cloud=email]', root).value.trim();
+        if (!cloudLogin.email.includes('@')) return toast('Vul je mailadres in');
+        try { await sendCode(cloudLogin.email); cloudLogin.sent = true; toast('Code verstuurd, kijk in je mail'); rerender(); }
+        catch (err) { toast(cloudLoginError(err)); }
+        return;
+      }
+      case 'cloudverify': {
+        const code = $('[data-cloud=code]', root).value.trim();
+        if (!code) return toast('Vul de code uit de mail in');
+        try {
+          const ok = await verifyCode(cloudLogin.email, code, { beforeFirstLink: async hasLocal => {
+            if (!hasLocal) return;
+            const r = await modal({ title: 'Eerst een back-up?', body: '<p>Wat op dit apparaat staat gaat straks mee naar je account. Een back-up is de veiligste start.</p>', actions: [{ label: 'Zonder back-up', value: null }, { label: 'Maak back-up', value: 'ok', primary: true }] });
+            if (r.action === 'ok') await exportBackup();
+          } });
+          if (ok) { cloudLogin.sent = false; toast('Ingelogd'); }
+          rerender();
+        } catch (err) { toast(cloudLoginError(err)); }
+        return;
+      }
+      case 'cloudback': cloudLogin.sent = false; return rerender();
+      case 'cloudsync': await syncNow(); return rerender();
+      case 'cloudout':
+        if (await confirmDialog('Je data blijft op dit apparaat, maar synchroniseert niet meer tot je weer inlogt.', { ok: 'Uitloggen', danger: false, title: 'Uitloggen?' })) { await signOut(); rerender(); }
+        return;
     }
   };
   $('[data-set=name]', root).addEventListener('change', e => setSetting('name', e.target.value.trim()));
   $('[data-toggle=autoShift]', root).addEventListener('change', e => { setSetting('autoShift', e.target.checked); toast(e.target.checked ? 'Automatisch inhalen staat aan' : 'Automatisch inhalen staat uit'); });
+}
+
+// Account en sync (blijft leeg zolang js/config.js niet is ingevuld)
+const cloudLogin = { email: '', sent: false };
+const cloudLoginError = e => (!e.status ? 'Geen verbinding, probeer het zo nog eens' : e.status === 429 ? 'Te veel pogingen, probeer het later nog eens' : e.status === 400 || e.status === 403 ? 'Die code klopt niet of is verlopen' : e.message);
+function cloudCard() {
+  if (!isConfigured()) return '';
+  const st = cloudStatus();
+  if (st.email) {
+    const when = st.lastSync ? new Date(st.lastSync).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'nog niet';
+    const line = st.state === 'offline' ? 'Geen verbinding. Sync gaat verder zodra je weer online bent.' : st.state === 'error' ? 'Sync lukt niet: ' + st.message : 'Laatst gesynchroniseerd: ' + when;
+    return `<section class="card">
+      <div class="card-h"><h3>Account en sync</h3></div>
+      <p><b>${esc(st.email)}</b></p>
+      <p class="muted">${esc(line)}${st.failed ? ` · ${st.failed} onderdeel/onderdelen konden niet mee` : ''}</p>
+      <div class="row gap wrap" style="margin-top:12px">
+        <button class="btn" data-a="cloudsync">Nu synchroniseren</button>
+        <button class="btn ghost" data-a="cloudout">Uitloggen</button>
+      </div>
+    </section>`;
+  }
+  if (cloudLogin.sent) return `<section class="card">
+      <div class="card-h"><h3>Account en sync</h3></div>
+      <p class="muted">We hebben een code gestuurd naar <b>${esc(cloudLogin.email)}</b>.</p>
+      <div class="row gap wrap" style="margin-top:12px">
+        <input class="input" data-cloud="code" inputmode="numeric" autocomplete="one-time-code" placeholder="Code uit de mail" style="flex:1;min-width:180px">
+        <button class="btn primary" data-a="cloudverify">Inloggen</button>
+        <button class="btn ghost" data-a="cloudback">Ander mailadres</button>
+      </div>
+    </section>`;
+  return `<section class="card">
+      <div class="card-h"><h3>Account en sync</h3></div>
+      <p class="muted">Log in om je notities, kaarten en planning op al je apparaten te hebben.${st.state === 'login' ? ' Je sessie is verlopen, log opnieuw in.' : ''}</p>
+      <div class="row gap wrap" style="margin-top:12px">
+        <input class="input" data-cloud="email" type="email" autocomplete="email" placeholder="jij@voorbeeld.nl" value="${esc(cloudLogin.email)}" style="flex:1;min-width:220px">
+        <button class="btn primary" data-a="cloudsend">Stuur code</button>
+      </div>
+    </section>`;
 }
 
 // ================= ZOEKEN =================

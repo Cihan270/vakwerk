@@ -6,6 +6,7 @@ import { openEditor } from './editor.js';
 import { catchUp } from './planner.js';
 import { autoDone } from './plansets.js';
 import { checkInbox, connectInbox } from './inbox.js';
+import { initCloud } from './cloud.js';
 
 const app = document.getElementById('app');
 let cleanup = null;
@@ -74,6 +75,12 @@ document.addEventListener('keydown', e => {
 
 route();
 requestPersistence();
+
+// Nieuws uit je account: scherm verversen, tenzij je ergens mee bezig bent
+initCloud({ onRemoteChange: () => {
+  const busy = document.body.classList.contains('in-editor') || document.querySelector('.modal-wrap') || location.hash.startsWith('#/oefenen') || document.activeElement?.matches?.('input, textarea');
+  if (!busy) route();
+} });
 
 // Inbox van Claude: bij openen en bij terugkomen in de app kijken of er iets nieuws is
 const pullInbox = () => checkInbox().then(r => { if (r && !document.body.classList.contains('in-editor')) route(); }).catch(() => {});

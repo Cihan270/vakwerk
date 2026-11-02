@@ -1,6 +1,7 @@
 // Import van studiepakketten (samenvattingen die Claude uit Canvas maakt) en back-ups.
 import { db, STORE_NAMES, deleteSubject } from './db.js';
 import { esc, uid, isoDay, modal, confirmDialog, toast, saveFile, SUBJECT_COLORS } from './util.js';
+import { isSignedIn } from './cloud.js';
 import { newSrs } from './srs.js';
 
 const norm = s => String(s || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, '');
@@ -193,7 +194,7 @@ export async function exportBackup() {
 
 export async function restoreBackup(data) {
   const n = data.stores?.subjects?.length || 0;
-  if (!await confirmDialog(`Back-up van ${data.created?.slice(0, 10) || '?'} met ${n} vakken terugzetten? Alles wat nu in de app staat wordt vervangen.`, { ok: 'Terugzetten', title: 'Back-up terugzetten' })) return null;
+  if (!await confirmDialog(`Back-up van ${data.created?.slice(0, 10) || '?'} met ${n} vakken terugzetten? Alles wat nu in de app staat wordt vervangen${isSignedIn() ? ', ook in je account en op je andere apparaten' : ''}.`, { ok: 'Terugzetten', title: 'Back-up terugzetten' })) return null;
   for (const s of STORE_NAMES) {
     await db.clear(s);
     let items = data.stores?.[s] || [];
@@ -218,7 +219,7 @@ export async function removeDemo() {
 }
 
 export async function wipeAll() {
-  if (!await confirmDialog('Alle vakken, notities, opnames, samenvattingen, opdrachten, flashcards en je planning worden van deze iPad verwijderd. Maak eerst een back-up als je iets wilt bewaren.', { ok: 'Alles wissen', title: 'Opnieuw beginnen' })) return false;
+  if (!await confirmDialog((isSignedIn() ? 'Alle vakken, notities, opnames, samenvattingen, opdrachten, flashcards en je planning worden verwijderd, ook uit je account en van je andere apparaten.' : 'Alle vakken, notities, opnames, samenvattingen, opdrachten, flashcards en je planning worden van deze iPad verwijderd.') + ' Maak eerst een back-up als je iets wilt bewaren.', { ok: 'Alles wissen', title: 'Opnieuw beginnen' })) return false;
   for (const s of STORE_NAMES) await db.clear(s);
   toast('Alles gewist — je begint opnieuw');
   return true;
